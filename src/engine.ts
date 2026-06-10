@@ -150,6 +150,11 @@ export class History {
   get oldestGeneration(): number {
     return this._totalGenerations - this.stack.length;
   }
+
+  // All stored layers as a plain array (oldest first)
+  toArray(): Grid[] {
+    return this.stack.slice();
+  }
 }
 
 export function printGrid(grid: Grid): string {
