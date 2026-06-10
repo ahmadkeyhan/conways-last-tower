@@ -1,17 +1,30 @@
-export type CellState = 0 | 1 | 2; // 0=dead, 1=alive, 2=dying (Brian's Brain)
-export type Grid = CellState[][];
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-export type StandardRuleset = {
-  kind: 'standard';
-  born: number[];
-  survive: number[];
+export type CellState = 0 | 1 | 2; // 0=dead  1=alive  2=dying (Brian's Brain)
+
+// Read-only grid view — used by History snapshots and Renderer.
+// index = row * cols + col
+export type Grid = {
+  readonly rows: number;
+  readonly cols: number;
+  readonly data: Uint8Array;
 };
 
-export type BrainRuleset = {
-  kind: 'brain';
+// Live simulation buffer — owns both front (data) and back arrays.
+// step() writes into back and returns the pair swapped; no Uint8Array is
+// allocated per generation once a GridBuffer exists.
+export type GridBuffer = {
+  readonly rows: number;
+  readonly cols: number;
+  readonly data: Uint8Array; // current generation (front)
+  readonly back: Uint8Array; // write scratch — do not read externally
 };
 
-export type Ruleset = StandardRuleset | BrainRuleset;
+// ── Rulesets ──────────────────────────────────────────────────────────────────
+
+export type StandardRuleset = { kind: 'standard'; born: number[]; survive: number[] };
+export type BrainRuleset    = { kind: 'brain' };
+export type Ruleset         = StandardRuleset | BrainRuleset;
 
 export const RULESETS = {
   classic:  { kind: 'standard' as const, born: [3],          survive: [2, 3] },
@@ -23,236 +36,271 @@ export const RULESETS = {
 
 export type RulesetName = keyof typeof RULESETS;
 
-export function createGrid(rows: number, cols: number): Grid {
-  return Array.from({ length: rows }, () => new Array<CellState>(cols).fill(0));
+// ── Grid primitives ───────────────────────────────────────────────────────────
+
+export function createGrid(rows: number, cols: number): GridBuffer {
+  return {
+    rows, cols,
+    data: new Uint8Array(rows * cols),
+    back: new Uint8Array(rows * cols),
+  };
 }
 
-export function cloneGrid(grid: Grid): Grid {
-  return grid.map(row => [...row] as CellState[]);
+// Produces a new GridBuffer from any Grid — copies data, allocates fresh back.
+export function cloneGrid(grid: Grid): GridBuffer {
+  return {
+    rows: grid.rows, cols: grid.cols,
+    data: grid.data.slice(),
+    back: new Uint8Array(grid.rows * grid.cols),
+  };
 }
 
-export function randomizeGrid(grid: Grid, density = 0.3, rng = Math.random): Grid {
-  const next = cloneGrid(grid);
-  for (let r = 0; r < next.length; r++) {
-    for (let c = 0; c < next[r].length; c++) {
-      next[r][c] = rng() < density ? 1 : 0;
-    }
-  }
-  return next;
+export function setCell(grid: Grid, row: number, col: number, state: CellState): void {
+  grid.data[row * grid.cols + col] = state;
 }
+
+export function getCell(grid: Grid, row: number, col: number): CellState {
+  return grid.data[row * grid.cols + col] as CellState;
+}
+
+// Returns a new GridBuffer with the front randomized; does not mutate the source.
+export function randomizeGrid(grid: Grid, density = 0.3, rng = Math.random): GridBuffer {
+  const size = grid.rows * grid.cols;
+  const data = new Uint8Array(size);
+  for (let i = 0; i < size; i++) data[i] = rng() < density ? 1 : 0;
+  return { rows: grid.rows, cols: grid.cols, data, back: new Uint8Array(size) };
+}
+
+// ── Neighbor counting (exported utility; NOT inlined inside step) ─────────────
 
 export function countAliveNeighbors(grid: Grid, row: number, col: number): number {
-  const rows = grid.length;
-  const cols = grid[0].length;
-  let count = 0;
+  const { rows, cols, data } = grid;
+  let n = 0;
   for (let dr = -1; dr <= 1; dr++) {
     for (let dc = -1; dc <= 1; dc++) {
       if (dr === 0 && dc === 0) continue;
       const nr = (row + dr + rows) % rows;
       const nc = (col + dc + cols) % cols;
-      // only state 1 counts as alive — dying cells (state 2) are inert for neighbor purposes
-      if (grid[nr][nc] === 1) count++;
+      if (data[nr * cols + nc] === 1) n++;
     }
   }
-  return count;
+  return n;
 }
 
 export function countAlive(grid: Grid): number {
-  let count = 0;
-  for (const row of grid) {
-    for (const cell of row) {
-      if (cell === 1) count++;
-    }
-  }
-  return count;
+  let n = 0;
+  const { data } = grid;
+  for (let i = 0; i < data.length; i++) if (data[i] === 1) n++;
+  return n;
 }
 
-export function step(grid: Grid, ruleset: Ruleset): Grid {
-  const rows = grid.length;
-  const cols = grid[0].length;
-  const next = createGrid(rows, cols);
+// ── Step ──────────────────────────────────────────────────────────────────────
+//
+// Writes the next generation into buf.back, then returns the buffer pair
+// with data/back swapped — zero Uint8Array allocations per call.
+//
+// Inner-loop optimisations:
+//   • Pre-compute wrapped row offsets (rp, rc, rn) once per row — eliminates
+//     the per-column modulo inside the column loop.
+//   • Uint8Array[9] born/survive lookup tables replace Array.includes (O(1)
+//     typed-array load vs. O(k) linear scan on every cell).
+//   • Standard-ruleset neighbor sum is a direct data[offset] addition —
+//     valid because standard rulesets only produce states 0 and 1.
+//   • Brian's Brain uses `& 1` to mask dying cells (state 2) from the count.
+
+export function step(buf: GridBuffer, ruleset: Ruleset): GridBuffer {
+  const { rows, cols } = buf;
+  const read  = buf.data;
+  const write = buf.back;
 
   if (ruleset.kind === 'brain') {
     for (let r = 0; r < rows; r++) {
+      const rp = (r === 0        ? rows - 1 : r - 1) * cols;
+      const rc = r * cols;
+      const rn = (r === rows - 1 ? 0        : r + 1) * cols;
+
       for (let c = 0; c < cols; c++) {
-        const state = grid[r][c];
-        if (state === 1) {
-          next[r][c] = 2; // alive → dying
-        } else if (state === 2) {
-          next[r][c] = 0; // dying → dead
-        } else {
-          // dead → alive if exactly 2 alive neighbors
-          next[r][c] = countAliveNeighbors(grid, r, c) === 2 ? 1 : 0;
-        }
+        const state = read[rc + c];
+        if (state === 1) { write[rc + c] = 2; continue; }
+        if (state === 2) { write[rc + c] = 0; continue; }
+
+        const cp = c === 0        ? cols - 1 : c - 1;
+        const cn = c === cols - 1 ? 0        : c + 1;
+        const n  = (read[rp + cp] & 1) + (read[rp + c] & 1) + (read[rp + cn] & 1)
+                 + (read[rc + cp] & 1)                       + (read[rc + cn] & 1)
+                 + (read[rn + cp] & 1) + (read[rn + c] & 1) + (read[rn + cn] & 1);
+        write[rc + c] = n === 2 ? 1 : 0;
       }
     }
   } else {
-    const { born, survive } = ruleset;
+    const bornSet    = new Uint8Array(9);
+    const surviveSet = new Uint8Array(9);
+    for (const b of ruleset.born)    bornSet[b]    = 1;
+    for (const s of ruleset.survive) surviveSet[s] = 1;
+
     for (let r = 0; r < rows; r++) {
+      const rp = (r === 0        ? rows - 1 : r - 1) * cols;
+      const rc = r * cols;
+      const rn = (r === rows - 1 ? 0        : r + 1) * cols;
+
       for (let c = 0; c < cols; c++) {
-        const alive = grid[r][c] === 1;
-        const n = countAliveNeighbors(grid, r, c);
-        if (alive) {
-          next[r][c] = survive.includes(n) ? 1 : 0;
-        } else {
-          next[r][c] = born.includes(n) ? 1 : 0;
-        }
+        const cp = c === 0        ? cols - 1 : c - 1;
+        const cn = c === cols - 1 ? 0        : c + 1;
+
+        const n = read[rp + cp] + read[rp + c] + read[rp + cn]
+                + read[rc + cp]                 + read[rc + cn]
+                + read[rn + cp] + read[rn + c]  + read[rn + cn];
+
+        write[rc + c] = read[rc + c] === 1 ? surviveSet[n] : bornSet[n];
       }
     }
   }
 
-  return next;
+  // Swap — one cheap object literal, no Uint8Array allocation
+  return { rows, cols, data: write, back: read };
 }
+
+// ── History ───────────────────────────────────────────────────────────────────
+//
+// Stores lightweight Grid snapshots: data.slice() copies only, no back buffer.
+// push() accepts any Grid (GridBuffer satisfies Grid structurally).
 
 export class History {
   private stack: Grid[] = [];
-  private _totalGenerations = 0;
+  private _total = 0;
   readonly maxDepth: number;
 
-  constructor(maxDepth: number) {
-    this.maxDepth = maxDepth;
+  constructor(maxDepth: number) { this.maxDepth = maxDepth; }
+
+  push(buf: Grid): void {
+    this.stack.push({ rows: buf.rows, cols: buf.cols, data: buf.data.slice() });
+    this._total++;
+    if (this.stack.length > this.maxDepth) this.stack.shift();
   }
 
-  push(grid: Grid): void {
-    this.stack.push(grid);
-    this._totalGenerations++;
-    if (this.stack.length > this.maxDepth) {
-      this.stack.shift();
-    }
-  }
+  get(index: number): Grid | undefined { return this.stack[index]; }
+  peek(): Grid | undefined              { return this.stack[this.stack.length - 1]; }
 
-  get(index: number): Grid | undefined {
-    return this.stack[index];
-  }
-
-  peek(): Grid | undefined {
-    return this.stack[this.stack.length - 1];
-  }
-
-  // Truncate to stackIndex (inclusive); used by the timeline scrubber on resume
   trimTo(stackIndex: number): void {
     const removed = this.stack.length - stackIndex - 1;
     if (removed <= 0) return;
     this.stack = this.stack.slice(0, stackIndex + 1);
-    this._totalGenerations -= removed;
+    this._total -= removed;
   }
 
-  get length(): number {
-    return this.stack.length;
-  }
+  toArray(): Grid[] { return this.stack.slice(); }
 
-  // Absolute generation number of the most recent stored frame
-  get totalGenerations(): number {
-    return this._totalGenerations;
-  }
-
-  // Absolute generation index of the oldest stored frame (= Z of stack[0])
-  get oldestGeneration(): number {
-    return this._totalGenerations - this.stack.length;
-  }
-
-  // All stored layers as a plain array (oldest first)
-  toArray(): Grid[] {
-    return this.stack.slice();
-  }
+  get length():           number { return this.stack.length; }
+  get totalGenerations(): number { return this._total; }
+  get oldestGeneration(): number { return this._total - this.stack.length; }
 }
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
 
 export function printGrid(grid: Grid): string {
-  return grid.map(row =>
-    row.map(c => (c === 0 ? '.' : c === 1 ? '#' : 'o')).join('')
-  ).join('\n');
+  const { rows, cols, data } = grid;
+  const lines: string[] = [];
+  for (let r = 0; r < rows; r++) {
+    let line = '';
+    for (let c = 0; c < cols; c++) {
+      const s = data[r * cols + c];
+      line += s === 0 ? '.' : s === 1 ? '#' : 'o';
+    }
+    lines.push(line);
+  }
+  return lines.join('\n');
 }
 
-// ── Console verification ──────────────────────────────────────────────────────
+function dataEquals(a: Grid, b: Grid, snap?: Uint8Array): boolean {
+  const ref = snap ?? b.data;
+  if (a.data.length !== ref.length) return false;
+  for (let i = 0; i < a.data.length; i++) if (a.data[i] !== ref[i]) return false;
+  return true;
+}
+
+// ── Console verification + benchmark ─────────────────────────────────────────
 
 export function runEngineTest(): void {
+  function alive(g: GridBuffer, ...coords: [number, number][]): void {
+    for (const [r, c] of coords) setCell(g, r, c, 1);
+  }
+
   console.group("Conway's Last Tower — Engine Test");
 
-  // ── Test 1: Blinker period-2 oscillation ─────────────────────────────────
-  console.group('1. Blinker (Classic B3/S23) — period-2 check');
+  // ── 1. Blinker period-2 ───────────────────────────────────────────────────
+  // Snapshot gen0 before stepping — the double-buffer swap overwrites g0.data
+  // after two steps, so we compare gen2 against the captured snapshot.
+  console.group('1. Blinker (Classic B3/S23) — period-2');
   const g0 = createGrid(5, 5);
-  g0[2][1] = 1; g0[2][2] = 1; g0[2][3] = 1;
+  alive(g0, [2,1],[2,2],[2,3]);
+  const gen0snap = g0.data.slice();
   console.log('Gen 0 (horizontal):\n' + printGrid(g0));
-
   const g1 = step(g0, RULESETS.classic);
-  console.log('Gen 1 (vertical):\n' + printGrid(g1));
-
+  console.log('Gen 1 (vertical):\n'   + printGrid(g1));
   const g2 = step(g1, RULESETS.classic);
-  console.log('Gen 2 (should match gen 0):\n' + printGrid(g2));
-
-  const period2 = JSON.stringify(g0) === JSON.stringify(g2);
-  console.log('Period-2 ✓:', period2 ? 'PASS' : 'FAIL');
+  console.log('Gen 2 (horizontal):\n' + printGrid(g2));
+  console.log('Period-2 ✓:', dataEquals(g2, g2, gen0snap) ? 'PASS' : 'FAIL');
   console.groupEnd();
 
-  // ── Test 2: Block still life ──────────────────────────────────────────────
-  console.group('2. Block (still life) — no-change check');
+  // ── 2. Block still life ───────────────────────────────────────────────────
+  console.group('2. Block — still life');
   const block = createGrid(4, 4);
-  block[1][1] = 1; block[1][2] = 1;
-  block[2][1] = 1; block[2][2] = 1;
+  alive(block, [1,1],[1,2],[2,1],[2,2]);
+  const blockSnap = block.data.slice();
   const blockNext = step(block, RULESETS.classic);
-  const stillLife = JSON.stringify(block) === JSON.stringify(blockNext);
-  console.log('Still life ✓:', stillLife ? 'PASS' : 'FAIL');
+  console.log('Still life ✓:', dataEquals(blockNext, blockNext, blockSnap) ? 'PASS' : 'FAIL');
   console.groupEnd();
 
-  // ── Test 3: Glider maintains 5 alive cells ────────────────────────────────
-  console.group('3. Glider — alive-count stability over 8 steps');
-  const gliderBase = createGrid(12, 12);
-  gliderBase[1][2] = 1;
-  gliderBase[2][3] = 1;
-  gliderBase[3][1] = 1; gliderBase[3][2] = 1; gliderBase[3][3] = 1;
-  console.log('Gen 0:\n' + printGrid(gliderBase));
-
-  let glider = gliderBase;
+  // ── 3. Glider alive-count ─────────────────────────────────────────────────
+  console.group('3. Glider — 5 alive cells over 8 steps');
+  let gl = createGrid(12, 12);
+  alive(gl, [1,2],[2,3],[3,1],[3,2],[3,3]);
   let gliderOk = true;
-  for (let i = 1; i <= 8; i++) {
-    glider = step(glider, RULESETS.classic);
-    if (countAlive(glider) !== 5) { gliderOk = false; break; }
+  for (let i = 0; i < 8; i++) {
+    gl = step(gl, RULESETS.classic);
+    if (countAlive(gl) !== 5) { gliderOk = false; break; }
   }
-  console.log('8-step alive-count (expect 5 each) ✓:', gliderOk ? 'PASS' : 'FAIL');
-  console.log('Gen 8:\n' + printGrid(glider));
+  console.log('8-step alive-count ✓:', gliderOk ? 'PASS' : 'FAIL');
   console.groupEnd();
 
-  // ── Test 4: Brian's Brain state transitions ───────────────────────────────
-  console.group("4. Brian's Brain — state cycle 1→2→0");
+  // ── 4. Brian's Brain state cycle ─────────────────────────────────────────
+  console.group("4. Brian's Brain — 1→2→0 cycle");
   const brain = createGrid(5, 5);
-  // place two alive cells flanking a dead cell
-  brain[2][1] = 1; brain[2][3] = 1;
-  console.log('Gen 0 (two alive cells):\n' + printGrid(brain));
-
-  const brain1 = step(brain, RULESETS.brain);
-  console.log('Gen 1 (alive→dying, dead with 2 alive nbrs→alive):\n' + printGrid(brain1));
-
-  const brain2 = step(brain1, RULESETS.brain);
-  console.log('Gen 2:\n' + printGrid(brain2));
-
-  const dyingTransition = brain1[2][1] === 2 && brain1[2][3] === 2;
-  const bornTransition   = brain1[2][2] === 1;
-  console.log('Alive→dying ✓:', dyingTransition ? 'PASS' : 'FAIL');
-  console.log('Dead(2 alive nbrs)→alive ✓:', bornTransition ? 'PASS' : 'FAIL');
+  alive(brain, [2,1],[2,3]);
+  const br1 = step(brain, RULESETS.brain);
+  console.log('Alive→dying ✓:',        (getCell(br1,2,1) === 2 && getCell(br1,2,3) === 2) ? 'PASS' : 'FAIL');
+  console.log('Dead(2 nbrs)→alive ✓:', getCell(br1,2,2) === 1 ? 'PASS' : 'FAIL');
+  const br2 = step(br1, RULESETS.brain);
+  console.log('Dying→dead ✓:',         (getCell(br2,2,1) === 0 && getCell(br2,2,3) === 0) ? 'PASS' : 'FAIL');
   console.groupEnd();
 
-  // ── Test 5: History stack ─────────────────────────────────────────────────
-  console.group('5. History — push / get / trimTo');
+  // ── 5. History stack ──────────────────────────────────────────────────────
+  console.group('5. History — push / trimTo / accounting');
   const hist = new History(5);
   let cur = createGrid(3, 3);
-  cur[0][0] = 1;
-  for (let i = 0; i < 8; i++) {
-    hist.push(cur);
-    cur = step(cur, RULESETS.classic);
-  }
-  const depthOk = hist.length === 5;
-  const totalOk = hist.totalGenerations === 8;
-  const oldestOk = hist.oldestGeneration === 3;
-  console.log('maxDepth capped at 5:', depthOk ? 'PASS' : `FAIL (got ${hist.length})`);
-  console.log('totalGenerations = 8:', totalOk ? 'PASS' : `FAIL (got ${hist.totalGenerations})`);
-  console.log('oldestGeneration = 3:', oldestOk ? 'PASS' : `FAIL (got ${hist.oldestGeneration})`);
-
-  hist.trimTo(2); // keep stack[0..2]
-  const trimOk  = hist.length === 3;
-  const totalTrimOk = hist.totalGenerations === 6;
-  console.log('trimTo(2) → length 3:', trimOk ? 'PASS' : `FAIL (got ${hist.length})`);
-  console.log('totalGenerations after trim = 6:', totalTrimOk ? 'PASS' : `FAIL (got ${hist.totalGenerations})`);
+  setCell(cur, 0, 0, 1);
+  for (let i = 0; i < 8; i++) { hist.push(cur); cur = step(cur, RULESETS.classic); }
+  console.log('capped at 5:',        hist.length === 5           ? 'PASS' : `FAIL (${hist.length})`);
+  console.log('totalGenerations=8:', hist.totalGenerations === 8 ? 'PASS' : `FAIL (${hist.totalGenerations})`);
+  console.log('oldestGeneration=3:', hist.oldestGeneration === 3 ? 'PASS' : `FAIL (${hist.oldestGeneration})`);
+  hist.trimTo(2);
+  console.log('trimTo(2)→length 3:', hist.length === 3           ? 'PASS' : `FAIL (${hist.length})`);
+  console.log('total after trim=6:', hist.totalGenerations === 6 ? 'PASS' : `FAIL (${hist.totalGenerations})`);
   console.groupEnd();
 
-  console.groupEnd(); // root group
+  // ── 6. Benchmark ─────────────────────────────────────────────────────────
+  console.group('6. Benchmark — 100 gens on 100×100 (Classic)');
+  // Seeded LCG so the benchmark is reproducible without the fxhash shim
+  let seed = 0xdeadbeef;
+  const lcg = (): number => {
+    seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;
+    return seed / 0xffffffff;
+  };
+  let bench = randomizeGrid(createGrid(100, 100), 0.35, lcg);
+  console.time('step ×100');
+  for (let i = 0; i < 100; i++) bench = step(bench, RULESETS.classic);
+  console.timeEnd('step ×100');
+  console.groupEnd();
+
+  console.groupEnd();
 }

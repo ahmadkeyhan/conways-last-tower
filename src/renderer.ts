@@ -134,8 +134,8 @@ export class Renderer {
 
     if (layers.length === 0) return;
 
-    const rows = layers[0].length;
-    const cols = layers[0][0]?.length ?? 0;
+    const rows = layers[0].rows;
+    const cols = layers[0].cols;
     if (rows === 0 || cols === 0) return;
 
     const { ox, oy } = this.cameraOrigin(rows, cols, currentZ);
@@ -164,7 +164,7 @@ export class Renderer {
       const cells: Array<{ r: number; c: number; state: CellState; depth: number }> = [];
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
-          const s = layer[r][c];
+          const s = layer.data[r * cols + c] as CellState;
           if (s !== 0) cells.push({ r, c, state: s, depth: r + c });
         }
       }
@@ -210,8 +210,8 @@ export class Renderer {
   }
 
   drawLayer(grid: Grid, z: number): void {
-    const rows = grid.length;
-    const cols = grid[0]?.length ?? 0;
+    const rows = grid.rows;
+    const cols = grid.cols;
     const { ox, oy } = this.cameraOrigin(rows, cols, z);
     const { ctx, tileW, skin } = this;
     const outline = skin.gridColor;
@@ -219,7 +219,7 @@ export class Renderer {
     const cells: Array<{ r: number; c: number; state: CellState; depth: number }> = [];
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const s = grid[r][c];
+        const s = grid.data[r * cols + c] as CellState;
         if (s !== 0) cells.push({ r, c, state: s, depth: r + c });
       }
     }
