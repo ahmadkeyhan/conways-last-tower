@@ -31,6 +31,54 @@ export function toIso(
   };
 }
 
+// ── Cell cache ────────────────────────────────────────────────────────────────
+//
+// Sorted + face-culled cell lists are expensive to build (O(n log n) sort).
+// Since Grid snapshots from History are immutable, we cache per Grid object
+// using a WeakMap — built once on first render, free on all subsequent frames.
+//
+// Face culling:
+//   • Left face  is hidden when the cell directly "behind-left" (row+1, col)
+//     is alive — it fully covers the face from the camera's perspective.
+//   • Right face is hidden when the cell "behind-right" (row, col+1) is alive.
+//   • Top face is never culled within a layer.
+
+type CachedCell = {
+  r: number; c: number;
+  state: CellState;
+  depth: number;       // r + c — ascending = painter's order
+  showLeft: boolean;
+  showRight: boolean;
+};
+
+const cellCache = new WeakMap<Grid, CachedCell[]>();
+
+function buildCells(layer: Grid): CachedCell[] {
+  const { rows, cols, data } = layer;
+  const cells: CachedCell[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const s = data[r * cols + c] as CellState;
+      if (s === 0) continue;
+      const belowRow = (r + 1) % rows;
+      const rightCol = (c + 1) % cols;
+      cells.push({
+        r, c, state: s, depth: r + c,
+        showLeft:  data[belowRow * cols + c]     !== 1,
+        showRight: data[r        * cols + rightCol] !== 1,
+      });
+    }
+  }
+  cells.sort((a, b) => a.depth - b.depth);
+  return cells;
+}
+
+function getCells(layer: Grid): CachedCell[] {
+  let cells = cellCache.get(layer);
+  if (!cells) { cells = buildCells(layer); cellCache.set(layer, cells); }
+  return cells;
+}
+
 // ── Cube geometry ─────────────────────────────────────────────────────────────
 
 type FaceColors = { top: string; left: string; right: string; outline: string | undefined };
@@ -39,21 +87,22 @@ function drawCube(
   ctx: CanvasRenderingContext2D,
   sx: number, sy: number, tw: number,
   colors: FaceColors,
+  showLeft: boolean,
+  showRight: boolean,
 ): void {
-  const hw = tw / 2;   // half width
-  const qw = tw / 4;   // quarter width (= diamond half-height)
-  const sh = tw / 2;   // side-face height (equals diamond height for a cube)
+  const hw = tw / 2;
+  const qw = tw / 4;
+  const sh = tw / 2;
 
-  // 7 key vertices
-  const Tx = sx,       Ty = sy;             // top of diamond
-  const Rx = sx + hw,  Ry = sy + qw;        // right of diamond
-  const Mx = sx,       My = sy + hw;        // center-bottom of diamond
-  const Lx = sx - hw,  Ly = sy + qw;        // left of diamond
-  const BLx = sx - hw, BLy = sy + qw + sh;  // bottom-left
-  const BCx = sx,      BCy = sy + hw + sh;  // bottom-center
-  const BRx = sx + hw, BRy = sy + qw + sh;  // bottom-right
+  const Tx = sx,       Ty = sy;
+  const Rx = sx + hw,  Ry = sy + qw;
+  const Mx = sx,       My = sy + hw;
+  const Lx = sx - hw,  Ly = sy + qw;
+  const BLx = sx - hw, BLy = sy + qw + sh;
+  const BCx = sx,      BCy = sy + hw + sh;
+  const BRx = sx + hw, BRy = sy + qw + sh;
 
-  // top face (diamond)
+  // top face — always drawn
   ctx.beginPath();
   ctx.moveTo(Tx, Ty); ctx.lineTo(Rx, Ry);
   ctx.lineTo(Mx, My); ctx.lineTo(Lx, Ly);
@@ -66,28 +115,29 @@ function drawCube(
     ctx.stroke();
   }
 
-  // left face
-  ctx.beginPath();
-  ctx.moveTo(Lx, Ly);   ctx.lineTo(Mx, My);
-  ctx.lineTo(BCx, BCy); ctx.lineTo(BLx, BLy);
-  ctx.closePath();
-  ctx.fillStyle = colors.left;
-  ctx.fill();
-  if (colors.outline) ctx.stroke();
+  if (showLeft) {
+    ctx.beginPath();
+    ctx.moveTo(Lx, Ly);   ctx.lineTo(Mx, My);
+    ctx.lineTo(BCx, BCy); ctx.lineTo(BLx, BLy);
+    ctx.closePath();
+    ctx.fillStyle = colors.left;
+    ctx.fill();
+    if (colors.outline) ctx.stroke();
+  }
 
-  // right face
-  ctx.beginPath();
-  ctx.moveTo(Mx, My);   ctx.lineTo(Rx, Ry);
-  ctx.lineTo(BRx, BRy); ctx.lineTo(BCx, BCy);
-  ctx.closePath();
-  ctx.fillStyle = colors.right;
-  ctx.fill();
-  if (colors.outline) ctx.stroke();
+  if (showRight) {
+    ctx.beginPath();
+    ctx.moveTo(Mx, My);   ctx.lineTo(Rx, Ry);
+    ctx.lineTo(BRx, BRy); ctx.lineTo(BCx, BCy);
+    ctx.closePath();
+    ctx.fillStyle = colors.right;
+    ctx.fill();
+    if (colors.outline) ctx.stroke();
+  }
 }
 
 function faceColors(palette: CubePalette, state: CellState, outline: string | undefined): FaceColors {
   if (state === 2) {
-    // Brian's Brain dying cells — subdued grey so they read as "fading"
     return { top: '#555', left: '#2e2e2e', right: '#3d3d3d', outline };
   }
   return { top: palette.topFace, left: palette.leftFace, right: palette.rightFace, outline };
@@ -108,12 +158,6 @@ export class Renderer {
     this.tileW = config.tileWidth;
   }
 
-  // Camera origin so the center of `currentZ` layer sits at 35% of screen height.
-  //
-  // Derivation: the center cell of layer currentZ at (col=cols/2, row=rows/2) maps to:
-  //   screen_y = oy + (cols+rows)/2 * tw/4 - currentZ * tw/2
-  // Setting that equal to canvas.height * 0.35 and solving for oy gives:
-  //   oy = canvas.height * 0.35 - (cols+rows) * tw/8 + currentZ * tw/2
   private cameraOrigin(
     rows: number, cols: number, currentZ: number,
   ): { ox: number; oy: number } {
@@ -124,8 +168,7 @@ export class Renderer {
     };
   }
 
-  // Render the full tower. `layers` is oldest-first; `currentZ` is the
-  // absolute Z index of layers[layers.length - 1].
+  // `layers` is oldest-first; `currentZ` is the absolute Z of layers[last].
   render(layers: Grid[], currentZ: number): void {
     const { ctx, canvas, tileW, skin } = this;
 
@@ -139,50 +182,34 @@ export class Renderer {
     if (rows === 0 || cols === 0) return;
 
     const { ox, oy } = this.cameraOrigin(rows, cols, currentZ);
-    const baseZ = currentZ - layers.length + 1;
-    const outline = skin.gridColor;
-
-    // Compute layer screen bounds for culling
-    // Top of layer z (highest screen point) = cell (0,0,z) → oy + toIso(0,0,z).y
-    // Bottom of layer z (lowest) = bottom-face of cell (rows-1,cols-1,z) → + tw (cube height)
-    const cubeH = tileW; // total cube visual height = tw/2 (diamond) + tw/2 (sides)
-
-    const topLi = layers.length - 1; // index of the newest layer
+    const baseZ    = currentZ - layers.length + 1;
+    const outline  = skin.gridColor;
+    const cubeH    = tileW;
+    const topLi    = layers.length - 1;
 
     for (let li = 0; li < layers.length; li++) {
       const z = baseZ + li;
 
-      // Cull layers fully outside the viewport
-      const layerTopY  = oy - z * (tileW / 2);
-      const layerBotY  = oy + (rows + cols - 2) * (tileW / 4) - z * (tileW / 2) + cubeH;
+      // Viewport cull
+      const layerTopY = oy - z * (tileW / 2);
+      const layerBotY = oy + (rows + cols - 2) * (tileW / 4) - z * (tileW / 2) + cubeH;
       if (layerBotY < 0 || layerTopY > canvas.height) continue;
 
       const palette = li === topLi ? skin.latestPalette : skin.historyPalette;
       const layer   = layers[li];
+      const cells   = getCells(layer); // cached — O(1) on repeat frames
 
-      // Collect non-dead cells; sort ascending by (row+col) for painter's algorithm
-      const cells: Array<{ r: number; c: number; state: CellState; depth: number }> = [];
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-          const s = layer.data[r * cols + c] as CellState;
-          if (s !== 0) cells.push({ r, c, state: s, depth: r + c });
-        }
-      }
-      cells.sort((a, b) => a.depth - b.depth);
-
-      for (const { r, c, state } of cells) {
+      for (const { r, c, state, showLeft, showRight } of cells) {
         const { x, y } = toIso(c, r, z, tileW);
-        drawCube(ctx, ox + x, oy + y, tileW, faceColors(palette, state, outline));
+        drawCube(ctx, ox + x, oy + y, tileW, faceColors(palette, state, outline), showLeft, showRight);
       }
     }
 
-    // Subtle grid diamonds for the top layer (only when tileW is large enough to see)
     if (skin.gridColor && tileW >= 8) {
       this.drawGridOverlay(rows, cols, currentZ, ox, oy);
     }
   }
 
-  // Draws the diamond outlines of each cell at layer z (floor plane reference)
   private drawGridOverlay(
     rows: number, cols: number, z: number,
     ox: number, oy: number,
@@ -192,7 +219,6 @@ export class Renderer {
     const qw = tileW / 4;
     ctx.strokeStyle = skin.gridColor!;
     ctx.lineWidth = 0.5;
-    // Draw at z+1 so the grid sits on top of the top layer's cubes
     const gz = z + 1;
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
@@ -210,24 +236,15 @@ export class Renderer {
   }
 
   drawLayer(grid: Grid, z: number): void {
-    const rows = grid.rows;
-    const cols = grid.cols;
+    const { rows, cols } = grid;
     const { ox, oy } = this.cameraOrigin(rows, cols, z);
     const { ctx, tileW, skin } = this;
     const outline = skin.gridColor;
+    const cells   = getCells(grid);
 
-    const cells: Array<{ r: number; c: number; state: CellState; depth: number }> = [];
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const s = grid.data[r * cols + c] as CellState;
-        if (s !== 0) cells.push({ r, c, state: s, depth: r + c });
-      }
-    }
-    cells.sort((a, b) => a.depth - b.depth);
-
-    for (const { r, c, state } of cells) {
+    for (const { r, c, state, showLeft, showRight } of cells) {
       const { x, y } = toIso(c, r, z, tileW);
-      drawCube(ctx, ox + x, oy + y, tileW, faceColors(skin.latestPalette, state, outline));
+      drawCube(ctx, ox + x, oy + y, tileW, faceColors(skin.latestPalette, state, outline), showLeft, showRight);
     }
   }
 

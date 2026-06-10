@@ -34,17 +34,21 @@ export default function App() {
     window.addEventListener('resize', resize);
 
     // ── Simulation loop ───────────────────────────────────────────────────────
-    const STEP_MS = 120; // ~8 generations/second
+    const STEP_MS = 1000 / 12; // 24 generations/second
     let lastStep = 0;
     let raf = 0;
-    let alive = true;
+    let running = true;
+
+    // Cache toArray() result — only rebuilt on step, not on every RAF frame
+    let layers = history.toArray();
 
     function loop(t: number) {
-      if (!alive) return;
+      if (!running) return;
 
       if (t - lastStep >= STEP_MS) {
         grid = step(grid, ruleset);
         history.push(grid);
+        layers = history.toArray();
         lastStep = t;
 
         if (infoRef.current) {
@@ -53,14 +57,14 @@ export default function App() {
         }
       }
 
-      renderer.render(history.toArray(), history.totalGenerations - 1);
+      renderer.render(layers, history.totalGenerations - 1);
       raf = requestAnimationFrame(loop);
     }
 
     raf = requestAnimationFrame(loop);
 
     return () => {
-      alive = false;
+      running = false;
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', resize);
     };
