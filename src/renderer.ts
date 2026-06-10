@@ -147,6 +147,8 @@ export class Renderer {
     // Bottom of layer z (lowest) = bottom-face of cell (rows-1,cols-1,z) → + tw (cube height)
     const cubeH = tileW; // total cube visual height = tw/2 (diamond) + tw/2 (sides)
 
+    const topLi = layers.length - 1; // index of the newest layer
+
     for (let li = 0; li < layers.length; li++) {
       const z = baseZ + li;
 
@@ -155,7 +157,8 @@ export class Renderer {
       const layerBotY  = oy + (rows + cols - 2) * (tileW / 4) - z * (tileW / 2) + cubeH;
       if (layerBotY < 0 || layerTopY > canvas.height) continue;
 
-      const layer = layers[li];
+      const palette = li === topLi ? skin.latestPalette : skin.historyPalette;
+      const layer   = layers[li];
 
       // Collect non-dead cells; sort ascending by (row+col) for painter's algorithm
       const cells: Array<{ r: number; c: number; state: CellState; depth: number }> = [];
@@ -169,7 +172,7 @@ export class Renderer {
 
       for (const { r, c, state } of cells) {
         const { x, y } = toIso(c, r, z, tileW);
-        drawCube(ctx, ox + x, oy + y, tileW, faceColors(skin.palette, state, outline));
+        drawCube(ctx, ox + x, oy + y, tileW, faceColors(palette, state, outline));
       }
     }
 
@@ -224,7 +227,7 @@ export class Renderer {
 
     for (const { r, c, state } of cells) {
       const { x, y } = toIso(c, r, z, tileW);
-      drawCube(ctx, ox + x, oy + y, tileW, faceColors(skin.palette, state, outline));
+      drawCube(ctx, ox + x, oy + y, tileW, faceColors(skin.latestPalette, state, outline));
     }
   }
 

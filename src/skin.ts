@@ -1,42 +1,50 @@
-// Aesthetic configuration — stub
-// All visual parameters are derived deterministically from the fxHash seed.
+// Aesthetic configuration — all visual parameters derived from the fxHash seed.
 
 export type CubePalette = {
-  topFace: string;   // CSS color for the top face of a cube
-  leftFace: string;  // left face (shadow)
-  rightFace: string; // right face (shadow, opposite side)
-  deadCell: string;  // empty cell / background tint
+  topFace:   string; // CSS color for the top face
+  leftFace:  string; // left side (shadow)
+  rightFace: string; // right side (highlight or secondary shadow)
+  deadCell:  string; // reserved for future tileset logic
 };
 
 export type Skin = {
-  id: string;
-  name: string;
-  palette: CubePalette;
-  // Path prefix for pre-rendered tileset sprites, e.g. '/assets/tilesets/stone/'
-  tilesetPath: string;
-  // Grid line color; undefined = no grid lines
-  gridColor?: string;
-  // Background canvas color
+  id:             string;
+  name:           string;
+  // Full-brightness palette used for the newest (top) layer
+  latestPalette:  CubePalette;
+  // Darkened palette used for every older layer
+  historyPalette: CubePalette;
+  tilesetPath:    string;
+  gridColor?:     string;
   backgroundColor: string;
 };
 
-// Derive a Skin from a seeded random function (provided by fxhash.ts)
-export function deriveSkin(rng: () => number): Skin {
-  void rng;
-  // TODO: sample hue, saturation, lightness; pick tileset variant; generate palette
+export function deriveSkin(_rng: () => number): Skin {
+  // TODO: sample hue/saturation from rng, generate both palettes
   return FALLBACK_SKIN;
 }
 
 export const FALLBACK_SKIN: Skin = {
-  id: 'stone',
+  id:   'stone',
   name: 'Stone',
-  palette: {
-    topFace:   '#c8c0b8',
-    leftFace:  '#807870',
-    rightFace: '#a09890',
+
+  // Latest layer — bright warm limestone
+  latestPalette: {
+    topFace:   '#56e91c',
+    leftFace:  '#242424',
+    rightFace: '#686868',
     deadCell:  '#1a1a1a',
   },
-  tilesetPath: '/assets/tilesets/stone/',
-  gridColor: 'rgba(255,255,255,0.04)',
-  backgroundColor: '#111111',
+
+  // History layers — dark, cold basalt
+  historyPalette: {
+    topFace:   '#9f9f9f',
+    leftFace:  '#242424',
+    rightFace: '#686868',
+    deadCell:  '#1a1a1a',
+  },
+
+  tilesetPath:     '/assets/tilesets/stone/',
+  gridColor:       'rgba(255,255,255,0.04)',
+  backgroundColor: '#242424',
 };
