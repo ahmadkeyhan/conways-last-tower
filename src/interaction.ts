@@ -27,17 +27,8 @@ export type SimControls = {
 };
 
 export class InteractionManager {
-  private config: InteractionConfig;
-  private painting = false;
-
-  constructor(config: InteractionConfig) {
-    this.config = config;
-    this.bindEvents();
-  }
-
-  private bindEvents(): void {
-    // TODO: pointerdown / pointermove / pointerup for cell painting
-    // TODO: stamp drag-and-drop placement
+  constructor(_config: InteractionConfig) {
+    // TODO: store config, bind pointer events
   }
 
   // Convert canvas pixel coords to grid cell (handles isometric mapping)
@@ -47,19 +38,20 @@ export class InteractionManager {
   }
 
   applyStampToGrid(grid: Grid, stamp: Stamp, row: number, col: number, rotation: number, flip: boolean): Grid {
-    // TODO: rotate/flip stamp pattern then stamp onto grid
+    // TODO: rotate/flip stamp before applying
     void rotation; void flip;
-    const next = grid.map(r => [...r]) as Grid;
+    const { rows, cols } = grid;
+    const data = grid.data.slice();
     for (let dr = 0; dr < stamp.pattern.length; dr++) {
       for (let dc = 0; dc < stamp.pattern[dr].length; dc++) {
         const r = row + dr;
         const c = col + dc;
-        if (r >= 0 && r < next.length && c >= 0 && c < next[0].length) {
-          next[r][c] = stamp.pattern[dr][dc] as 0 | 1;
+        if (r >= 0 && r < rows && c >= 0 && c < cols) {
+          data[r * cols + c] = stamp.pattern[dr][dc] as 0 | 1;
         }
       }
     }
-    return next;
+    return { rows, cols, data };
   }
 
   destroy(): void {

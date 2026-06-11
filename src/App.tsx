@@ -39,7 +39,7 @@ export default function App() {
     // Commit the initial generation so there is always one layer in cache
     renderer.commitLayer(grid);
 
-    const STEP_MS = 1000 / 12;
+    const STEP_MS = 1000 / 24;
     let lastStep = 0;
     let raf = 0;
     let running = true;

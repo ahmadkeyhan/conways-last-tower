@@ -1,4 +1,5 @@
-import type { Grid, CellState } from './engine';
+import * as THREE from 'three';
+import type { Grid } from './engine';
 import type { Skin } from './skin';
 
 // ── Public config ─────────────────────────────────────────────────────────────
@@ -12,13 +13,7 @@ export type RendererConfig = {
   historyDepth: number;
 };
 
-// ── Isometric projection ──────────────────────────────────────────────────────
-//
-//   screenX = (col - row) * tw/2
-//   screenY = (col + row) * tw/4  −  z * tw/2
-//
-// (x, y) = top-center vertex of the cube's top-face diamond.
-
+// Kept for interaction.ts pixel → grid-cell hit-testing.
 export function toIso(
   col: number, row: number, z: number, tw: number,
 ): { x: number; y: number } {
@@ -28,315 +23,213 @@ export function toIso(
   };
 }
 
-// ── Cube drawing primitives ───────────────────────────────────────────────────
-
-type BodyColors = { top: string; left: string; right: string; outline?: string };
-
-// Both CanvasRenderingContext2D and OffscreenCanvasRenderingContext2D share the
-// drawing API; this alias lets drawCubeBody / drawCubeTop accept either.
-type AnyCtx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-
-// Three-face body — rendered once into the OffscreenCanvas cache per layer.
-// showLeft / showRight come from face culling (hidden when a neighbor is alive).
-function drawCubeBody(
-  ctx: AnyCtx2D,
-  sx: number, sy: number, tw: number,
-  colors: BodyColors,
-  showLeft: boolean,
-  showRight: boolean,
-): void {
-  const hw = tw / 2;
-  const qw = tw / 4;
-  const sh = tw / 2;
-
-  const Tx = sx,       Ty = sy;
-  const Rx = sx + hw,  Ry = sy + qw;
-  const Mx = sx,       My = sy + hw;
-  const Lx = sx - hw,  Ly = sy + qw;
-  const BLx = sx - hw, BLy = sy + qw + sh;
-  const BCx = sx,      BCy = sy + hw + sh;
-  const BRx = sx + hw, BRy = sy + qw + sh;
-
-  // Top face (dark body colour — overwritten by cap on the live layer)
-  ctx.beginPath();
-  ctx.moveTo(Tx, Ty); ctx.lineTo(Rx, Ry);
-  ctx.lineTo(Mx, My); ctx.lineTo(Lx, Ly);
-  ctx.closePath();
-  ctx.fillStyle = colors.top;
-  ctx.fill();
-  if (colors.outline) {
-    ctx.strokeStyle = colors.outline;
-    ctx.lineWidth = 0.5;
-    ctx.stroke();
-  }
-
-  if (showLeft) {
-    ctx.beginPath();
-    ctx.moveTo(Lx, Ly);   ctx.lineTo(Mx, My);
-    ctx.lineTo(BCx, BCy); ctx.lineTo(BLx, BLy);
-    ctx.closePath();
-    ctx.fillStyle = colors.left;
-    ctx.fill();
-    if (colors.outline) ctx.stroke();
-  }
-
-  if (showRight) {
-    ctx.beginPath();
-    ctx.moveTo(Mx, My);   ctx.lineTo(Rx, Ry);
-    ctx.lineTo(BRx, BRy); ctx.lineTo(BCx, BCy);
-    ctx.closePath();
-    ctx.fillStyle = colors.right;
-    ctx.fill();
-    if (colors.outline) ctx.stroke();
-  }
-}
-
-// Accent cap — top diamond only, drawn live every frame over the newest layer.
-function drawCubeTop(
-  ctx: AnyCtx2D,
-  sx: number, sy: number, tw: number,
-  accent: string,
-): void {
-  const hw = tw / 2;
-  const qw = tw / 4;
-  ctx.fillStyle = accent;
-  ctx.beginPath();
-  ctx.moveTo(sx,      sy);
-  ctx.lineTo(sx + hw, sy + qw);
-  ctx.lineTo(sx,      sy + hw);
-  ctx.lineTo(sx - hw, sy + qw);
-  ctx.closePath();
-  ctx.fill();
-}
-
-// ── Sorted cell list (painter's algorithm + face culling) ─────────────────────
-//
-// Built once per committed layer (inside commitLayer) and cached in
-// `this.currentCells`. Re-used on every RAF frame for the cap pass —
-// no sort or allocation at render time.
-
-type SortedCell = {
-  r: number; c: number;
-  state: CellState;
-  depth: number;
-  showLeft: boolean;
-  showRight: boolean;
-};
-
-function buildSortedCells(grid: Grid): SortedCell[] {
-  const { rows, cols, data } = grid;
-  const cells: SortedCell[] = [];
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const state = data[r * cols + c] as CellState;
-      if (state === 0) continue;
-      const belowRow = (r + 1) % rows;
-      const rightCol = (c + 1) % cols;
-      cells.push({
-        r, c, state, depth: r + c,
-        showLeft:  data[belowRow * cols + c]       !== 1,
-        showRight: data[r        * cols + rightCol] !== 1,
-      });
-    }
-  }
-  cells.sort((a, b) => a.depth - b.depth);
-  return cells;
-}
-
-// ── Layout ────────────────────────────────────────────────────────────────────
-//
-// All OffscreenCanvas instances share identical dimensions determined by
-// grid size and tile width. The blit positions on the main canvas change only
-// on window resize, so they are precomputed here.
-//
-//  OffscreenCanvas coordinate system:
-//    localOriginX = rows * tw/2   (shifts origin so the leftmost cell is at x=0)
-//    localOriginY = 0             (top of the (0,0) diamond is the top edge)
-//
-//  Main canvas blit positions:
-//    blit_x       = constant for all layers (horizontal centering)
-//    blit_y_top   = y of the newest layer's OffscreenCanvas top-left
-//    older layers = blit_y_top + (topLi - li) * tw/2   (each is tw/2 lower)
-
-type Layout = {
-  blit_x:       number;
-  blit_y_top:   number;
-  localOriginX: number;
-  osWidth:      number;
-  osHeight:     number;
-};
-
-function computeLayout(
-  canvasW: number, canvasH: number,
-  rows: number, cols: number, tileW: number,
-): Layout {
-  return {
-    blit_x:       canvasW / 2 - (rows + cols) * tileW / 4,
-    blit_y_top:   canvasH * 0.35 - (rows + cols) * tileW / 8,
-    localOriginX: rows * tileW / 2,
-    osWidth:      (rows + cols) * tileW / 2,
-    osHeight:     (rows + cols + 2) * tileW / 4,
-  };
-}
-
 // ── Renderer ──────────────────────────────────────────────────────────────────
+//
+// Architecture:
+//   • historyMesh  — InstancedMesh that accumulates all frozen layers.
+//                    Instances are appended once (in _flushCap) and only
+//                    removed when the history window is trimmed (O(1) copyWithin).
+//   • capMesh      — InstancedMesh rebuilt each step with the current live layer.
+//                    The accent color makes it visually distinct from history.
+//
+// Coordinate system:
+//   x = col − cols/2 + 0.5
+//   y = layerIndex × 0.5 + 0.25   (boxes are 0.5 units tall, stacked flush)
+//   z = row − rows/2 + 0.5
+//
+// The OrthographicCamera sits at (1,1,1)-normalised × D from the pivot so the
+// scene renders in classic isometric projection.  The pivot follows the top
+// layer so it stays at ~35 % from the top of the viewport.
 
 export class Renderer {
   readonly canvas: HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D;
   skin: Skin;
   tileW: number;
-  private rows: number;
-  private cols: number;
   private historyDepth: number;
 
-  // OffscreenCanvas per committed generation — body only, rendered once.
-  private layerCache: OffscreenCanvas[] = [];
+  private gl: THREE.WebGLRenderer;
+  private scene: THREE.Scene;
+  private camera: THREE.OrthographicCamera;
+  private historyMesh: THREE.InstancedMesh;
+  private capMesh: THREE.InstancedMesh;
+  private maxHistoryInstances: number;
 
-  // Sorted+culled cells for the current live generation.
-  // Set inside commitLayer; re-used in render() so the cap pass allocates nothing.
-  private currentCells: SortedCell[] | null = null;
+  // Running counts — updated in commitLayer / _flushCap
+  private historyInstanceCount = 0;
+  private layerInstanceCounts: number[] = [];
+  private totalCommits = 0;
+  private frustumH: number;
 
-  private layout: Layout;
+  // Reusable scratch objects — avoid per-frame allocations
+  private readonly _mat  = new THREE.Matrix4();
+  private readonly _camPivot = new THREE.Vector3();
+  // (1,1,1)-normalised direction, stable across frames
+  private readonly _isoDir = new THREE.Vector3(1, 1, 1).normalize();
 
   constructor(config: RendererConfig) {
-    this.canvas       = config.canvas;
-    this.ctx          = config.canvas.getContext('2d')!;
-    this.skin         = config.skin;
-    this.tileW        = config.tileWidth;
-    this.rows         = config.rows;
-    this.cols         = config.cols;
-    this.historyDepth = config.historyDepth;
-    this.layout = computeLayout(
-      config.canvas.width, config.canvas.height,
-      this.rows, this.cols, this.tileW,
+    const { canvas, skin, tileWidth, rows, cols, historyDepth } = config;
+    this.canvas       = canvas;
+    this.skin         = skin;
+    this.tileW        = tileWidth;
+    this.historyDepth = historyDepth;
+
+    // World units visible vertically — grid footprint fills ~60 % of height
+    this.frustumH = (rows + cols) * 0.7;
+
+    // ── WebGL renderer ────────────────────────────────────────────────────
+    this.gl = new THREE.WebGLRenderer({ canvas, antialias: true });
+    this.gl.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+    // ── Scene ─────────────────────────────────────────────────────────────
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(skin.backgroundColor);
+
+    // ── Camera ────────────────────────────────────────────────────────────
+    const fh = this.frustumH;
+    this.camera = new THREE.OrthographicCamera(
+      -fh / 2, fh / 2,   // left / right (will be fixed by resize)
+       fh / 2, -fh / 2,  // top / bottom
+      -2000, 2000,
     );
+    const D = fh * 2;
+    this.camera.position.set(D, D, D);
+    this.camera.lookAt(0, 0, 0);
+
+    // ── Lighting — directional from upper-right for natural 3-face shading ─
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+    const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+    sun.position.set(3, 5, 2);
+    this.scene.add(sun);
+
+    // ── Geometry & meshes ─────────────────────────────────────────────────
+    // Flat voxel: 1 unit wide, 0.5 units tall, 1 unit deep
+    const box = new THREE.BoxGeometry(1, 0.5, 1);
+
+    // Cap instance buffer at 100 MB (each Matrix4 = 64 bytes)
+    this.maxHistoryInstances = Math.min(
+      historyDepth * rows * cols,
+      Math.floor((100 * 1024 * 1024) / 64),
+    );
+
+    this.historyMesh = new THREE.InstancedMesh(
+      box,
+      new THREE.MeshLambertMaterial({ color: new THREE.Color(skin.historyPalette.topFace) }),
+      this.maxHistoryInstances,
+    );
+    this.historyMesh.count = 0;
+
+    this.capMesh = new THREE.InstancedMesh(
+      box,
+      new THREE.MeshLambertMaterial({ color: new THREE.Color(skin.accent) }),
+      rows * cols,
+    );
+    this.capMesh.count = 0;
+
+    this.scene.add(this.historyMesh, this.capMesh);
   }
 
   // ── commitLayer ─────────────────────────────────────────────────────────────
-  // Call once per new generation (same cadence as history.push).
-  // Renders the body into an OffscreenCanvas and stores it; also caches the
-  // sorted cell list for the subsequent cap passes.
+  // Called once per generation at step cadence (same as history.push).
 
   commitLayer(grid: Grid): void {
-    const { tileW, skin, layout } = this;
-    const { osWidth, osHeight, localOriginX } = layout;
-    const outline = skin.gridColor;
+    // Freeze the outgoing cap into the history mesh
+    this._flushCap();
 
-    const cells = buildSortedCells(grid);
-    this.currentCells = cells;
-
-    const os  = new OffscreenCanvas(Math.ceil(osWidth), Math.ceil(osHeight));
-    const ctx = os.getContext('2d')!;
-
-    for (const { r, c, state, showLeft, showRight } of cells) {
-      const colors: BodyColors = state === 2
-        ? { top: '#555', left: '#2e2e2e', right: '#3d3d3d', outline }
-        : { top: skin.historyPalette.topFace, left: skin.historyPalette.leftFace, right: skin.historyPalette.rightFace, outline };
-      const { x, y } = toIso(c, r, 0, tileW);
-      drawCubeBody(ctx, localOriginX + x, y, tileW, colors, showLeft, showRight);
+    // Trim oldest history layer when the window is full
+    if (this.layerInstanceCounts.length >= this.historyDepth) {
+      const removed = this.layerInstanceCounts.shift()!;
+      const arr = this.historyMesh.instanceMatrix.array as Float32Array;
+      arr.copyWithin(0, removed * 16);
+      this.historyInstanceCount -= removed;
     }
 
-    this.layerCache.push(os);
-    if (this.layerCache.length > this.historyDepth) this.layerCache.shift();
+    this.historyMesh.count = this.historyInstanceCount;
+    this.historyMesh.instanceMatrix.needsUpdate = true;
+
+    // Build the new cap for the incoming grid
+    this._buildCap(grid);
+
+    this.totalCommits++;
+    this._trackCamera();
   }
 
-  // Rebuild the full cache from a layers array (for timeline scrubber replay).
+  // Rebuild the full cache from a layers array (timeline scrubber).
   rebuildCache(layers: Grid[]): void {
-    this.layerCache   = [];
-    this.currentCells = null;
+    this.historyMesh.count    = 0;
+    this.historyInstanceCount = 0;
+    this.layerInstanceCounts  = [];
+    this.totalCommits         = 0;
+    this.capMesh.count        = 0;
     for (const g of layers) this.commitLayer(g);
   }
 
   // ── render ──────────────────────────────────────────────────────────────────
-  // Called every RAF frame.
-  //
-  // Pass 1 — blit all cached body OffscreenCanvases oldest → newest.
-  //           Each layer is a single drawImage call. Historical layers cost
-  //           nothing beyond a GPU texture blit.
-  //
-  // Pass 2 — draw the accent cap (top diamond only) for every alive cell in
-  //           the current live generation, using the pre-built currentCells list.
-  //           No sort, no allocation.
+  // Called every RAF frame — just dispatches to WebGL.
 
   render(): void {
-    const { ctx, canvas, tileW, skin, layerCache, layout } = this;
-    const { blit_x, blit_y_top, localOriginX, osHeight } = layout;
-
-    ctx.fillStyle = skin.backgroundColor;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    if (layerCache.length === 0) return;
-
-    const topLi = layerCache.length - 1;
-
-    // Pass 1: blit bodies
-    for (let li = 0; li <= topLi; li++) {
-      const blit_y = blit_y_top + (topLi - li) * (tileW / 2);
-      if (blit_y + osHeight < 0 || blit_y > canvas.height) continue;
-      ctx.drawImage(layerCache[li], blit_x, blit_y);
-    }
-
-    // Pass 2: accent cap over the top layer
-    const capOX = blit_x + localOriginX;
-    const capOY = blit_y_top;
-    const cells  = this.currentCells;
-    if (cells) {
-      for (const { r, c, state } of cells) {
-        if (state !== 1) continue; // cap = alive cells only, not dying
-        const { x, y } = toIso(c, r, 0, tileW);
-        drawCubeTop(ctx, capOX + x, capOY + y, tileW, skin.accent);
-      }
-    }
-
-    // Grid overlay (floats one cube-height above the caps)
-    if (skin.gridColor && tileW >= 8) {
-      this.drawGridOverlay(capOX, capOY);
-    }
+    this.gl.render(this.scene, this.camera);
   }
 
-  private drawGridOverlay(capOX: number, capOY: number): void {
-    const { ctx, tileW, skin, rows, cols } = this;
-    const hw = tileW / 2;
-    const qw = tileW / 4;
-    ctx.strokeStyle = skin.gridColor!;
-    ctx.lineWidth = 0.5;
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const { x, y } = toIso(c, r, 1, tileW); // z=1 → grid sits above the caps
-        const sx = capOX + x, sy = capOY + y;
-        ctx.beginPath();
-        ctx.moveTo(sx,      sy);
-        ctx.lineTo(sx + hw, sy + qw);
-        ctx.lineTo(sx,      sy + hw);
-        ctx.lineTo(sx - hw, sy + qw);
-        ctx.closePath();
-        ctx.stroke();
-      }
-    }
-  }
-
-  // Single-layer draw onto the main canvas (used by stamp preview, scrubber, etc.)
+  // Single-layer preview (stamp preview / scrubber hover).
   drawLayer(grid: Grid, _z: number): void {
-    const { ctx, tileW, skin, layout } = this;
-    const { blit_x, blit_y_top, localOriginX } = layout;
-    const ox = blit_x + localOriginX;
-    const oy = blit_y_top;
-    const outline = skin.gridColor;
-
-    for (const { r, c, state, showLeft, showRight } of buildSortedCells(grid)) {
-      const colors: BodyColors = state === 2
-        ? { top: '#555', left: '#2e2e2e', right: '#3d3d3d', outline }
-        : { top: skin.historyPalette.topFace, left: skin.historyPalette.leftFace, right: skin.historyPalette.rightFace, outline };
-      const { x, y } = toIso(c, r, 0, tileW);
-      drawCubeBody(ctx, ox + x, oy + y, tileW, colors, showLeft, showRight);
-    }
+    this._buildCap(grid);
+    this.gl.render(this.scene, this.camera);
   }
 
   resize(width: number, height: number): void {
-    this.canvas.width  = width;
-    this.canvas.height = height;
-    // OffscreenCanvas contents remain valid; only blit positions change.
-    this.layout = computeLayout(width, height, this.rows, this.cols, this.tileW);
+    this.gl.setSize(width, height, false);
+    const aspect = width / height;
+    const fh = this.frustumH;
+    this.camera.left   = -fh * aspect / 2;
+    this.camera.right  =  fh * aspect / 2;
+    this.camera.top    =  fh / 2;
+    this.camera.bottom = -fh / 2;
+    this.camera.updateProjectionMatrix();
+  }
+
+  // ── Private helpers ──────────────────────────────────────────────────────────
+
+  // Copy the current capMesh instances into the historyMesh buffer as a frozen layer.
+  // Uses a single typed-array set() — no per-instance JS overhead.
+  private _flushCap(): void {
+    const n = this.capMesh.count;
+    if (n === 0) return;
+    if (this.historyInstanceCount + n > this.maxHistoryInstances) return;
+
+    const src = this.capMesh.instanceMatrix.array as Float32Array;
+    const dst = this.historyMesh.instanceMatrix.array as Float32Array;
+    dst.set(src.subarray(0, n * 16), this.historyInstanceCount * 16);
+
+    this.layerInstanceCounts.push(n);
+    this.historyInstanceCount += n;
+  }
+
+  // Write instance matrices for every non-dead cell in grid into capMesh.
+  // makeTranslation is faster than Object3D.updateMatrix (no quaternion path).
+  private _buildCap(grid: Grid): void {
+    const { rows, cols, data } = grid;
+    const layerY = this.totalCommits * 0.5 + 0.25;
+    let count = 0;
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (data[r * cols + c] === 0) continue;
+        this._mat.makeTranslation(c - cols / 2 + 0.5, layerY, r - rows / 2 + 0.5);
+        this.capMesh.setMatrixAt(count++, this._mat);
+      }
+    }
+    this.capMesh.count = count;
+    this.capMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  // Keep the top layer at ~35 % from the top of the viewport by moving the
+  // camera pivot — the (1,1,1) look direction is always preserved.
+  private _trackCamera(): void {
+    const topY   = (this.totalCommits - 1) * 0.5 + 0.25;
+    const pivotY = topY - this.frustumH * 0.12;
+    const D      = this.frustumH * 2;
+    this._camPivot.set(0, pivotY, 0);
+    this.camera.position.copy(this._camPivot).addScaledVector(this._isoDir, D);
+    this.camera.lookAt(this._camPivot);
   }
 }
