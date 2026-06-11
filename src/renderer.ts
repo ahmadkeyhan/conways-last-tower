@@ -73,10 +73,15 @@ export class Renderer {
   // Reusable scratch objects — avoid per-frame allocations
   private readonly _mat  = new THREE.Matrix4();
   private readonly _camPivot = new THREE.Vector3();
-  // (1,1,1)-normalised direction, stable across frames
-  private readonly _isoDir = new THREE.Vector3(1, 1, 1).normalize();
   // World Y of the live layer's top face — drives the height fog (see bodyMat)
   private readonly _towerTopY = { value: 1 };
+
+  // Camera orbit — one full revolution every 90 s, same elevation as the
+  // classic (1,1,1) iso view. The sun stays fixed in world space, so the
+  // lit and shadowed sides drift past as the camera circles the tower.
+  private static readonly ORBIT_SPEED = (2 * Math.PI) / 90; // rad/s
+  private _camAngle = Math.PI / 4; // start at the classic iso corner
+  private _lastFrameT = -1;        // performance.now() of the previous frame
 
   constructor(config: RendererConfig) {
     const { canvas, skin, tileWidth, rows, cols } = config;
@@ -262,6 +267,14 @@ export class Renderer {
   // Called every RAF frame — just dispatches to WebGL.
 
   render(): void {
+    // Advance the orbit by wall-clock time so speed is framerate-independent
+    const now = performance.now();
+    if (this._lastFrameT >= 0) {
+      this._camAngle += ((now - this._lastFrameT) / 1000) * Renderer.ORBIT_SPEED;
+    }
+    this._lastFrameT = now;
+    this._positionCamera();
+
     this.gl.render(this.scene, this.camera);
   }
 
@@ -345,13 +358,26 @@ export class Renderer {
     // Height-fog reference: world Y of the live layer's top face
     this._towerTopY.value = this.totalCommits;
     this._camPivot.set(0, pivotY, 0);
-    this.camera.position.copy(this._camPivot).addScaledVector(this._isoDir, fh * 2);
-    this.camera.lookAt(this._camPivot);
+    this._positionCamera();
 
     // Sun rides along with the pivot so the shadow frustum always covers the
     // visible portion of the tower.
     this.sun.position.set(fh * 0.55, pivotY + fh * 1.1, fh * 0.3);
     this.sun.target.position.copy(this._camPivot);
     this.sun.target.updateMatrixWorld();
+  }
+
+  // Place the camera on the orbit circle around the current pivot, keeping
+  // the elevation of the classic (1,1,1) iso view: for distance D the
+  // vertical offset is D/√3 and the horizontal radius D·√(2/3).
+  private _positionCamera(): void {
+    const D = this.frustumH * 2;
+    const R = D * Math.sqrt(2 / 3);
+    this.camera.position.set(
+      this._camPivot.x + R * Math.cos(this._camAngle),
+      this._camPivot.y + D / Math.sqrt(3),
+      this._camPivot.z + R * Math.sin(this._camAngle),
+    );
+    this.camera.lookAt(this._camPivot);
   }
 }
