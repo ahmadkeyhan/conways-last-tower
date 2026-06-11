@@ -5,27 +5,30 @@ import { FALLBACK_SKIN } from './skin';
 import { initFx } from './fxhash';
 
 export default function App() {
-  const canvasRef  = useRef<HTMLCanvasElement>(null);
-  const infoRef    = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const infoRef   = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current!;
 
-    // ── Init from fxHash / dev shim ──────────────────────────────────────────
     const { rng, traits } = initFx();
     const ruleset = RULESETS[traits.ruleset];
-
-    // ── Initial grid ─────────────────────────────────────────────────────────
     const N = traits.gridSize;
+
     const history = new History(traits.historyDepth);
     let grid = randomizeGrid(createGrid(N, N), 0.35, rng);
     history.push(grid);
 
-    // ── Renderer ─────────────────────────────────────────────────────────────
-    // Scale tile size so the grid fits within ~70% of the viewport width
     const tileW = Math.min(32, Math.max(4, Math.floor((window.innerWidth * 0.7) / N)));
 
-    const renderer = new Renderer({ canvas, skin: FALLBACK_SKIN, tileWidth: tileW });
+    const renderer = new Renderer({
+      canvas,
+      skin: FALLBACK_SKIN,
+      tileWidth: tileW,
+      rows: N,
+      cols: N,
+      historyDepth: traits.historyDepth,
+    });
 
     function resize() {
       renderer.resize(window.innerWidth, window.innerHeight);
@@ -33,14 +36,13 @@ export default function App() {
     resize();
     window.addEventListener('resize', resize);
 
-    // ── Simulation loop ───────────────────────────────────────────────────────
-    const STEP_MS = 1000 / 12; // 24 generations/second
+    // Commit the initial generation so there is always one layer in cache
+    renderer.commitLayer(grid);
+
+    const STEP_MS = 1000 / 12;
     let lastStep = 0;
     let raf = 0;
     let running = true;
-
-    // Cache toArray() result — only rebuilt on step, not on every RAF frame
-    let layers = history.toArray();
 
     function loop(t: number) {
       if (!running) return;
@@ -48,7 +50,7 @@ export default function App() {
       if (t - lastStep >= STEP_MS) {
         grid = step(grid, ruleset);
         history.push(grid);
-        layers = history.toArray();
+        renderer.commitLayer(grid);   // render body to OffscreenCanvas once
         lastStep = t;
 
         if (infoRef.current) {
@@ -57,7 +59,7 @@ export default function App() {
         }
       }
 
-      renderer.render(layers, history.totalGenerations - 1);
+      renderer.render();              // blit cached bodies + draw live cap
       raf = requestAnimationFrame(loop);
     }
 

@@ -1,19 +1,19 @@
 // Aesthetic configuration — all visual parameters derived from the fxHash seed.
 
 export type CubePalette = {
-  topFace:   string; // CSS color for the top face
-  leftFace:  string; // left side (shadow)
-  rightFace: string; // right side (highlight or secondary shadow)
+  topFace:   string;
+  leftFace:  string;
+  rightFace: string;
   deadCell:  string; // reserved for future tileset logic
 };
 
 export type Skin = {
   id:             string;
   name:           string;
-  // Full-brightness palette used for the newest (top) layer
-  latestPalette:  CubePalette;
-  // Darkened palette used for every older layer
+  // Body palette — rendered once into the OffscreenCanvas cache for every layer
   historyPalette: CubePalette;
+  // Accent — the bright cap diamond drawn live over the current (top) layer only
+  accent:         string;
   tilesetPath:    string;
   gridColor?:     string;
   backgroundColor: string;
@@ -28,21 +28,16 @@ export const FALLBACK_SKIN: Skin = {
   id:   'stone',
   name: 'Stone',
 
-  // Latest layer — bright warm limestone
-  latestPalette: {
-    topFace:   '#56e91c',
+  // Body — dark basalt, rendered once per layer into cache
+  historyPalette: {
+    topFace:   '#707070',
     leftFace:  '#242424',
-    rightFace: '#686868',
+    rightFace: '#494949',
     deadCell:  '#1a1a1a',
   },
 
-  // History layers — dark, cold basalt
-  historyPalette: {
-    topFace:   '#9f9f9f',
-    leftFace:  '#242424',
-    rightFace: '#686868',
-    deadCell:  '#1a1a1a',
-  },
+  // Cap — bright accent drawn live every frame over the newest layer only
+  accent: '#cf5ee6',
 
   tilesetPath:     '/assets/tilesets/stone/',
   gridColor:       'rgba(255,255,255,0.04)',
