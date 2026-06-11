@@ -48,7 +48,9 @@ export class Renderer {
   readonly canvas: HTMLCanvasElement;
   skin: Skin;
   tileW: number;
-  private historyDepth: number;
+  // Rendered history is capped at `rows` layers (independent of historyDepth)
+  // so the tower always reads as a perfect cube: rows × cols × rows.
+  private visibleLayers: number;
 
   private gl: THREE.WebGLRenderer;
   private scene: THREE.Scene;
@@ -64,22 +66,28 @@ export class Renderer {
   private layerInstanceCounts: number[] = [];
   private totalCommits = 0;
   private frustumH: number;
+  // Effective vertical frustum after aspect correction — equals frustumH in
+  // landscape, grows in portrait so the tower width never gets clipped.
+  private viewH: number;
 
   // Reusable scratch objects — avoid per-frame allocations
   private readonly _mat  = new THREE.Matrix4();
   private readonly _camPivot = new THREE.Vector3();
   // (1,1,1)-normalised direction, stable across frames
   private readonly _isoDir = new THREE.Vector3(1, 1, 1).normalize();
+  // World Y of the live layer's top face — drives the height fog (see bodyMat)
+  private readonly _towerTopY = { value: 1 };
 
   constructor(config: RendererConfig) {
-    const { canvas, skin, tileWidth, rows, cols, historyDepth } = config;
-    this.canvas       = canvas;
-    this.skin         = skin;
-    this.tileW        = tileWidth;
-    this.historyDepth = historyDepth;
+    const { canvas, skin, tileWidth, rows, cols } = config;
+    this.canvas        = canvas;
+    this.skin          = skin;
+    this.tileW         = tileWidth;
+    this.visibleLayers = rows;
 
     // World units visible vertically — grid footprint fills ~60 % of height
     this.frustumH = (rows + cols) * 0.7;
+    this.viewH    = this.frustumH; // corrected per-aspect in resize()
 
     // ── WebGL renderer ────────────────────────────────────────────────────
     this.gl = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -97,10 +105,12 @@ export class Renderer {
     const D  = fh * 2; // camera distance from pivot along the iso axis
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(skin.backgroundColor);
-    // Lower layers sit farther from the ortho camera — fog fades the tower
-    // base into the background for a cheap depth cue.
+    // Height fog: the body material rewrites the fog input to "distance below
+    // the tower top" (see bodyMat.onBeforeCompile), so near/far are in world-Y
+    // units. Fade starts 30% down the cube and bottoms out just past its base.
+    const towerH = rows; // visible tower = `rows` layers of unit cubes
     this.scene.fog = new THREE.Fog(
-      new THREE.Color(skin.backgroundColor), D + fh * 0.4, D + fh * 1.6,
+      new THREE.Color(skin.backgroundColor), towerH * 0.3 , towerH * 1.2 ,
     );
 
     // ── Camera ────────────────────────────────────────────────────────────
@@ -135,13 +145,13 @@ export class Renderer {
     this.scene.add(sun, sun.target);
 
     // ── Geometry & meshes ─────────────────────────────────────────────────
-    // Flat voxel: 1 unit wide, 0.5 units tall, 1 unit deep
-    const box = new THREE.BoxGeometry(1, 0.5, 1);
+    // Unit voxel — `rows` stacked layers form a rows × cols × rows cube
+    const box = new THREE.BoxGeometry(1, 1, 1);
 
-    // Cap instance buffer at 100 MB (each Matrix4 = 64 bytes)
+    // Worst case: every cell alive on every visible layer (64 B per Matrix4)
     this.maxHistoryInstances = Math.min(
-      historyDepth * rows * cols,
-      Math.floor((100 * 1024 * 1024) / 64),
+      this.visibleLayers * rows * cols,
+      Math.floor((192 * 1024 * 1024) / 64),
     );
 
     const bodyMat = new THREE.MeshStandardMaterial({
@@ -149,6 +159,24 @@ export class Renderer {
       roughness: 0.82,
       metalness: 0.08,
     });
+    // Distance fog reads view depth, which in an iso view varies diagonally
+    // across the footprint instead of down the tower. Rewrite the fog input
+    // to "distance below the tower top" so layers fade uniformly to the base.
+    bodyMat.onBeforeCompile = (shader) => {
+      shader.uniforms.uTowerTopY = this._towerTopY;
+      shader.vertexShader = shader.vertexShader
+        .replace(
+          '#include <common>',
+          '#include <common>\nuniform float uTowerTopY;',
+        )
+        .replace(
+          '#include <fog_vertex>',
+          `#ifdef USE_FOG
+            vec4 twp = modelMatrix * instanceMatrix * vec4( transformed, 1.0 );
+            vFogDepth = uTowerTopY - twp.y;
+          #endif`,
+        );
+    };
 
     this.historyMesh = new THREE.InstancedMesh(box, bodyMat, this.maxHistoryInstances);
     this.historyMesh.count = 0;
@@ -167,7 +195,9 @@ export class Renderer {
     capPlane.rotateX(-Math.PI / 2); // lie flat, facing +Y
     this.capMesh = new THREE.InstancedMesh(
       capPlane,
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(skin.accent) }),
+      // fog: false — caps sit at the tower top and must stay full-bright;
+      // the basic material isn't fog-patched, so default fog would wash it out.
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(skin.accent), fog: false }),
       rows * cols,
     );
     this.capMesh.count = 0;
@@ -189,8 +219,9 @@ export class Renderer {
     // Freeze the outgoing cap into the history mesh
     this._flushCap();
 
-    // Trim oldest history layer when the window is full
-    if (this.layerInstanceCounts.length >= this.historyDepth) {
+    // Trim the oldest layer once the cube is full — rendered history never
+    // exceeds `rows` layers even when engine historyDepth is larger.
+    if (this.layerInstanceCounts.length >= this.visibleLayers) {
       const removed = this.layerInstanceCounts.shift()!;
       const arr = this.historyMesh.instanceMatrix.array as Float32Array;
       arr.copyWithin(0, removed * 16);
@@ -198,7 +229,12 @@ export class Renderer {
     }
 
     this.historyMesh.count = this.historyInstanceCount;
-    this.historyMesh.instanceMatrix.needsUpdate = true;
+    // Upload only the used region — the buffer is sized for the worst case
+    // and a full bufferSubData per commit would move hundreds of MB/s.
+    const histAttr = this.historyMesh.instanceMatrix;
+    histAttr.clearUpdateRanges();
+    histAttr.addUpdateRange(0, this.historyInstanceCount * 16);
+    histAttr.needsUpdate = true;
 
     // Build the new cap for the incoming grid
     this._buildCap(grid);
@@ -238,12 +274,19 @@ export class Renderer {
   resize(width: number, height: number): void {
     this.gl.setSize(width, height, false);
     const aspect = width / height;
-    const fh = this.frustumH;
-    this.camera.left   = -fh * aspect / 2;
-    this.camera.right  =  fh * aspect / 2;
-    this.camera.top    =  fh / 2;
-    this.camera.bottom = -fh / 2;
+    // The horizontal extent is viewH × aspect. frustumH is sized to the
+    // tower's footprint width, so in landscape (aspect ≥ 1) it always fits.
+    // In portrait the vertical frustum must grow so the horizontal extent
+    // never shrinks below the footprint width (+8 % margin).
+    const vh = aspect >= 1 ? this.frustumH : (this.frustumH * 1.08) / aspect;
+    this.viewH = vh;
+    this.camera.left   = -vh * aspect / 2;
+    this.camera.right  =  vh * aspect / 2;
+    this.camera.top    =  vh / 2;
+    this.camera.bottom = -vh / 2;
     this.camera.updateProjectionMatrix();
+    // Pivot placement depends on viewH — recenter on the current tower top
+    this._trackCamera();
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────────
@@ -268,8 +311,8 @@ export class Renderer {
   // makeTranslation is faster than Object3D.updateMatrix (no quaternion path).
   private _buildCap(grid: Grid): void {
     const { rows, cols, data } = grid;
-    const layerY = this.totalCommits * 0.5 + 0.25;
-    const capY   = layerY + 0.25 + 0.01; // top of the 0.5-tall box + z-fight epsilon
+    const layerY = this.totalCommits + 0.5; // unit cube: layer i spans y ∈ [i, i+1]
+    const capY   = layerY + 0.5 + 0.01;     // top face + z-fight epsilon
     let count = 0;
 
     for (let r = 0; r < rows; r++) {
@@ -294,8 +337,13 @@ export class Renderer {
   // camera pivot — the (1,1,1) look direction is always preserved.
   private _trackCamera(): void {
     const fh     = this.frustumH;
-    const topY   = (this.totalCommits - 1) * 0.5 + 0.25;
-    const pivotY = topY - fh * 0.12;
+    const topY   = (this.totalCommits - 1) + 0.5; // live layer's cube center
+    // Offset uses the aspect-corrected frustum so the tower top sits at the
+    // same screen fraction in portrait and landscape alike.
+    const pivotY = topY - this.viewH * 0.12;
+
+    // Height-fog reference: world Y of the live layer's top face
+    this._towerTopY.value = this.totalCommits;
     this._camPivot.set(0, pivotY, 0);
     this.camera.position.copy(this._camPivot).addScaledVector(this._isoDir, fh * 2);
     this.camera.lookAt(this._camPivot);
