@@ -125,6 +125,12 @@ export class Renderer {
     );
     this.capMesh.count = 0;
 
+    // Bounding spheres are computed once from initial instance positions and
+    // go stale as the tower grows — the camera rises past them and Three.js
+    // culls the entire mesh. The camera always faces the tower, so skip culling.
+    this.historyMesh.frustumCulled = false;
+    this.capMesh.frustumCulled     = false;
+
     this.scene.add(this.historyMesh, this.capMesh);
   }
 
