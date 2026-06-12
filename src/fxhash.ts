@@ -77,13 +77,16 @@ export function initFx(): FxContext {
   }
 
   const rulesetNames: RulesetName[] = ['classic', 'highlife', 'maze', 'daynight', 'brain'];
+  // Traits below are pinned for testing; lerp/rulesetNames return to use
+  // once they are seed-derived again.
+  void lerp; void rulesetNames;
 
   const traits: TokenTraits = {
-    gridSize:     lerp(32, 128),
-    ruleset:      pick(rulesetNames),
+    gridSize:     60,
+    ruleset:      "highlife",
     stampTier:    pick([1, 2, 3, 4, 5, 6]) as StampTier,
-    historyDepth: lerp(50, 500),
-    skinId:       pick(['stone', 'crystal', 'neon', 'obsidian', 'ivory']),
+    historyDepth: 90,
+    skinId:       "stone",
   };
 
   api.features({

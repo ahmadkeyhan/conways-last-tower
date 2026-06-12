@@ -39,3 +39,63 @@ html, body, #root {
   white-space: nowrap;
   letter-spacing: 0.05em;
 }
+
+#controls {
+  position: absolute;
+  bottom: 36px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  pointer-events: auto;
+}
+
+#controls button {
+  background: none;
+  border: none;
+  padding: 4px 8px;
+  font: 16px/1 ui-monospace, Consolas, monospace;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+#controls button:hover:not(:disabled) {
+  color: rgba(255, 255, 255, 0.95);
+}
+
+#controls button:disabled {
+  color: rgba(255, 255, 255, 0.15);
+  cursor: default;
+}
+
+#scrubber {
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 60vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  pointer-events: auto;
+}
+
+#scrubber-label {
+  font: 11px/1.4 ui-monospace, Consolas, monospace;
+  color: rgba(255, 255, 255, 0.5);
+  white-space: nowrap;
+  letter-spacing: 0.05em;
+}
+
+#scrubber input[type='range'] {
+  /* Vertical slider: up = newer */
+  writing-mode: vertical-lr;
+  direction: rtl;
+  flex: 1;
+  width: 18px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #cf5ee6;
+}

@@ -82,6 +82,8 @@ export class Renderer {
   private static readonly ORBIT_SPEED = (2 * Math.PI) / 90; // rad/s
   private _camAngle = Math.PI / 4; // start at the classic iso corner
   private _lastFrameT = -1;        // performance.now() of the previous frame
+  // While paused, the orbit eases to this angle instead of advancing
+  private _angleTarget: number | null = null;
 
   constructor(config: RendererConfig) {
     const { canvas, skin, tileWidth, rows, cols } = config;
@@ -269,13 +271,33 @@ export class Renderer {
   render(): void {
     // Advance the orbit by wall-clock time so speed is framerate-independent
     const now = performance.now();
-    if (this._lastFrameT >= 0) {
-      this._camAngle += ((now - this._lastFrameT) / 1000) * Renderer.ORBIT_SPEED;
-    }
+    const dt  = this._lastFrameT >= 0 ? (now - this._lastFrameT) / 1000 : 0;
     this._lastFrameT = now;
+
+    if (this._angleTarget === null) {
+      this._camAngle += dt * Renderer.ORBIT_SPEED;
+    } else {
+      // Paused: ease into the nearest iso corner with exponential damping
+      const diff = this._angleTarget - this._camAngle;
+      this._camAngle = Math.abs(diff) < 0.0005
+        ? this._angleTarget
+        : this._camAngle + diff * Math.min(1, dt * 5);
+    }
     this._positionCamera();
 
     this.gl.render(this.scene, this.camera);
+  }
+
+  // Pause the orbit and glide to the nearest isometric corner (45° + k·90°).
+  // resumeOrbit continues the rotation from wherever the camera settled.
+  pauseOrbit(): void {
+    this._angleTarget =
+      Math.round((this._camAngle - Math.PI / 4) / (Math.PI / 2)) * (Math.PI / 2)
+      + Math.PI / 4;
+  }
+
+  resumeOrbit(): void {
+    this._angleTarget = null;
   }
 
   // Single-layer preview (stamp preview / scrubber hover).
