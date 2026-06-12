@@ -344,7 +344,9 @@ export class Renderer {
     const amt    = aspect < 1 ? this._pausedAmt : 0;
     const h      = this.viewH * (1 + 0.18 * amt);
     const w      = h * aspect;
-    const shift  = w * 0.12 * amt;
+    // Gentle nudge — the zoom-out already frees ~9 % on each side; more than
+    // a few percent pushes the tower past the left edge.
+    const shift  = w * 0.06 * amt;
     this.camera.left   = -w / 2 + shift;
     this.camera.right  =  w / 2 + shift;
     this.camera.top    =  h / 2;
