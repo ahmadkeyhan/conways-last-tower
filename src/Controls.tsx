@@ -10,15 +10,19 @@ export type ControlsProps = {
   onStepBack: () => void; // disabled at the oldest retained generation
   onStepFwd: () => void;  // at scrubMax: computes one new generation
   onScrub: (index: number) => void;
+  onRestart: () => void;  // fresh randomized grid, history cleared
 };
 
 export default function Controls({
   playing, scrubIndex, scrubMax, genLabel,
-  onPlayPause, onStepBack, onStepFwd, onScrub,
+  onPlayPause, onStepBack, onStepFwd, onScrub, onRestart,
 }: ControlsProps) {
   return (
     <>
       <div id="controls">
+        <button type="button" title="Restart" onClick={onRestart}>
+          ⟳
+        </button>
         {!playing && (
           <button
             type="button"

@@ -84,6 +84,11 @@ export class Renderer {
   private _lastFrameT = -1;        // performance.now() of the previous frame
   // While paused, the orbit eases to this angle instead of advancing
   private _angleTarget: number | null = null;
+  // Paused framing (portrait only): eases 0→1 on pause, 1→0 on resume.
+  // At 1 the view is zoomed out ~18 % and slid left to clear the scrubber.
+  private _pausedAmt = 0;
+  private _pausedTarget = 0;
+  private _aspect = 1;
 
   constructor(config: RendererConfig) {
     const { canvas, skin, tileWidth, rows, cols } = config;
@@ -285,6 +290,15 @@ export class Renderer {
     }
     this._positionCamera();
 
+    // Ease the paused framing (portrait zoom-out + slide) with the same damping
+    const fDiff = this._pausedTarget - this._pausedAmt;
+    if (fDiff !== 0) {
+      this._pausedAmt = Math.abs(fDiff) < 0.001
+        ? this._pausedTarget
+        : this._pausedAmt + fDiff * Math.min(1, dt * 5);
+      this._applyProjection();
+    }
+
     this.gl.render(this.scene, this.camera);
   }
 
@@ -294,10 +308,12 @@ export class Renderer {
     this._angleTarget =
       Math.round((this._camAngle - Math.PI / 4) / (Math.PI / 2)) * (Math.PI / 2)
       + Math.PI / 4;
+    this._pausedTarget = 1;
   }
 
   resumeOrbit(): void {
-    this._angleTarget = null;
+    this._angleTarget  = null;
+    this._pausedTarget = 0;
   }
 
   // Single-layer preview (stamp preview / scrubber hover).
@@ -309,19 +325,31 @@ export class Renderer {
   resize(width: number, height: number): void {
     this.gl.setSize(width, height, false);
     const aspect = width / height;
+    this._aspect = aspect;
     // The horizontal extent is viewH × aspect. frustumH is sized to the
     // tower's footprint width, so in landscape (aspect ≥ 1) it always fits.
     // In portrait the vertical frustum must grow so the horizontal extent
     // never shrinks below the footprint width (+8 % margin).
-    const vh = aspect >= 1 ? this.frustumH : (this.frustumH * 1.08) / aspect;
-    this.viewH = vh;
-    this.camera.left   = -vh * aspect / 2;
-    this.camera.right  =  vh * aspect / 2;
-    this.camera.top    =  vh / 2;
-    this.camera.bottom = -vh / 2;
-    this.camera.updateProjectionMatrix();
+    this.viewH = aspect >= 1 ? this.frustumH : (this.frustumH * 1.08) / aspect;
+    this._applyProjection();
     // Pivot placement depends on viewH — recenter on the current tower top
     this._trackCamera();
+  }
+
+  // Compute the orthographic bounds from viewH plus the paused framing:
+  // in portrait while paused, zoom out slightly and shift the visible window
+  // right (the tower slides left) so it clears the right-edge scrubber.
+  private _applyProjection(): void {
+    const aspect = this._aspect;
+    const amt    = aspect < 1 ? this._pausedAmt : 0;
+    const h      = this.viewH * (1 + 0.18 * amt);
+    const w      = h * aspect;
+    const shift  = w * 0.12 * amt;
+    this.camera.left   = -w / 2 + shift;
+    this.camera.right  =  w / 2 + shift;
+    this.camera.top    =  h / 2;
+    this.camera.bottom = -h / 2;
+    this.camera.updateProjectionMatrix();
   }
 
   // ── Private helpers ──────────────────────────────────────────────────────────

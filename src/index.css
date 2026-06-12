@@ -97,5 +97,20 @@ html, body, #root {
   width: 18px;
   margin: 0;
   cursor: pointer;
-  accent-color: #cf5ee6;
+  /* --accent is set on #app from the active skin */
+  accent-color: var(--accent, #ffffff);
+}
+
+/* Landscape: tower fills the vertical center — park controls and info in
+   the bottom-left corner so they never overlap it. */
+@media (orientation: landscape) {
+  #info-bar {
+    left: 24px;
+    transform: none;
+  }
+
+  #controls {
+    left: 24px;
+    transform: none;
+  }
 }

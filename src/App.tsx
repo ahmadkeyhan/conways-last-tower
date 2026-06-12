@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { createGrid, randomizeGrid, step, cloneGrid, History, RULESETS } from './engine';
 import type { Grid } from './engine';
 import { Renderer } from './renderer';
@@ -12,6 +13,7 @@ type SimAPI = {
   stepBack: () => void;
   stepFwd: () => void;
   scrubTo: (index: number) => void;
+  restart: () => void;
 };
 
 type UiState = {
@@ -36,8 +38,8 @@ export default function App() {
     const ruleset = RULESETS[traits.ruleset];
     const N = traits.gridSize;
 
-    const history = new History(traits.historyDepth);
-    let grid = randomizeGrid(createGrid(N, N), 0.35, rng);
+    let history = new History(traits.historyDepth);
+    let grid = randomizeGrid(createGrid(N, N), 0.05, rng);
     history.push(grid);
 
     const tileW = Math.min(32, Math.max(4, Math.floor((window.innerWidth * 0.7) / N)));
@@ -149,7 +151,22 @@ export default function App() {
       else play();
     }
 
-    simRef.current = { playPause, stepBack, stepFwd, scrubTo };
+    // Fresh randomized grid, cleared history, resumes playing.
+    // (The rng stream continues, so each restart produces a new layout.)
+    function restart() {
+      history = new History(traits.historyDepth);
+      grid = randomizeGrid(createGrid(N, N), 0.35, rng);
+      history.push(grid);
+      renderer.rebuildCache([grid]);
+      scrubLayers = null;
+      scrubIndex  = 0;
+      playing = true;
+      renderer.resumeOrbit();
+      updateInfo(`Gen ${history.totalGenerations}  |  ${traits.ruleset}  |  ${N}×${N}  |  tile ${tileW}px`);
+      syncUi();
+    }
+
+    simRef.current = { playPause, stepBack, stepFwd, scrubTo, restart };
 
     function onKey(e: KeyboardEvent) {
       if (e.code === 'Space') {
@@ -199,7 +216,8 @@ export default function App() {
   }, []);
 
   return (
-    <div id="app">
+    // --accent feeds the scrubber thumb color from the active skin
+    <div id="app" style={{ '--accent': FALLBACK_SKIN.accent } as CSSProperties}>
       <canvas ref={canvasRef} id="game-canvas" />
       <div id="ui-overlay">
         <div ref={infoRef} id="info-bar" />
@@ -212,6 +230,7 @@ export default function App() {
           onStepBack={() => simRef.current?.stepBack()}
           onStepFwd={() => simRef.current?.stepFwd()}
           onScrub={k => simRef.current?.scrubTo(k)}
+          onRestart={() => simRef.current?.restart()}
         />
       </div>
     </div>
