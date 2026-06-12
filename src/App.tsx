@@ -4,6 +4,9 @@ import { createGrid, randomizeGrid, step, cloneGrid, History, RULESETS } from '.
 import type { Grid } from './engine';
 import { Renderer } from './renderer';
 import Controls from './Controls';
+import StampPanel from './StampPanel';
+import { getStampById, rotatePattern, flipPattern } from './stamps';
+import type { Stamp, StampPattern } from './stamps';
 import { FALLBACK_SKIN } from './skin';
 import { initFx } from './fxhash';
 
@@ -14,10 +17,17 @@ type SimAPI = {
   stepFwd: () => void;
   scrubTo: (index: number) => void;
   restart: () => void;
+  enterEdit: () => void;
+  clearCanvas: () => void;
+  selectStamp: (id: string) => void;
+  rotateStamp: () => void;
+  flipStamp: () => void;
 };
 
 type UiState = {
   playing: boolean;
+  editing: boolean;
+  selectedStamp: string | null;
   scrubIndex: number;
   scrubMax: number;
   genLabel: string;
@@ -28,7 +38,8 @@ export default function App() {
   const infoRef   = useRef<HTMLDivElement>(null);
   const simRef    = useRef<SimAPI | null>(null);
   const [ui, setUi] = useState<UiState>({
-    playing: true, scrubIndex: 0, scrubMax: 0, genLabel: '',
+    playing: true, editing: false, selectedStamp: null,
+    scrubIndex: 0, scrubMax: 0, genLabel: '',
   });
 
   useEffect(() => {
@@ -70,6 +81,15 @@ export default function App() {
     let scrubLayers: Grid[] | null = null; // frozen history snapshot while paused
     let scrubIndex = 0;
 
+    // Edit mode state
+    let editing = false;
+    let selStamp: Stamp | null = null;
+    let stampRot  = 0;     // quarter-turns, 0..3
+    let stampFlip = false;
+    let painting  = false;
+    let paintVal: 0 | 1 = 1;
+    let hoverCell: { row: number; col: number } | null = null;
+
     function updateInfo(text: string) {
       if (infoRef.current) infoRef.current.textContent = text;
     }
@@ -80,15 +100,19 @@ export default function App() {
     }
 
     function syncUi() {
-      const paused = !playing && scrubLayers !== null;
+      const paused = !playing && !editing && scrubLayers !== null;
       setUi({
         playing,
+        editing,
+        selectedStamp: selStamp ? selStamp.id : null,
         scrubIndex,
         scrubMax: paused ? scrubLayers!.length - 1 : 0,
         genLabel: paused ? `gen ${genAt(scrubIndex)}` : '',
       });
       if (paused) {
         updateInfo(`paused @ gen ${genAt(scrubIndex)}  |  ${traits.ruleset}  |  ${N}×${N}`);
+      } else if (editing) {
+        updateInfo(`edit  |  draw or stamp  |  ${N}×${N}`);
       }
     }
 
@@ -116,7 +140,7 @@ export default function App() {
     }
 
     function scrubTo(index: number) {
-      if (playing || !scrubLayers) return;
+      if (playing || editing || !scrubLayers) return;
       const k = Math.max(0, Math.min(index, scrubLayers.length - 1));
       if (k === scrubIndex) return;
       scrubIndex = k;
@@ -125,12 +149,12 @@ export default function App() {
     }
 
     function stepBack() {
-      if (playing || !scrubLayers) return;
+      if (playing || editing || !scrubLayers) return;
       scrubTo(scrubIndex - 1);
     }
 
     function stepFwd() {
-      if (playing || !scrubLayers) return;
+      if (playing || editing || !scrubLayers) return;
       if (scrubIndex < scrubLayers.length - 1) {
         // Walk forward through existing history — never trims
         scrubTo(scrubIndex + 1);
@@ -147,7 +171,8 @@ export default function App() {
     }
 
     function playPause() {
-      if (playing) pause();
+      if (editing) startFromCanvas();
+      else if (playing) pause();
       else play();
     }
 
@@ -160,15 +185,162 @@ export default function App() {
       renderer.rebuildCache([grid]);
       scrubLayers = null;
       scrubIndex  = 0;
+      editing  = false;
+      selStamp = null;
+      renderer.setGhost(null);
       playing = true;
       renderer.resumeOrbit();
       updateInfo(`Gen ${history.totalGenerations}  |  ${traits.ruleset}  |  ${N}×${N}  |  tile ${tileW}px`);
       syncUi();
     }
 
-    simRef.current = { playPause, stepBack, stepFwd, scrubTo, restart };
+    // ── Edit mode ───────────────────────────────────────────────────────────
+
+    function enterEdit() {
+      if (editing) return;
+      playing = false;
+      // Edit what is displayed: adopt the scrubbed snapshot if rewound
+      if (scrubLayers && scrubIndex < scrubLayers.length - 1) {
+        grid = cloneGrid(scrubLayers[scrubIndex]);
+      }
+      scrubLayers = null;
+      editing = true;
+      renderer.setEditView(true);          // glide to top-down, axis-aligned
+      renderer.rebuildCache([grid]);       // collapse tower to the canvas layer
+      syncUi();
+    }
+
+    // Start the engine with the edited canvas as generation 0 (fresh tower).
+    function startFromCanvas() {
+      if (!editing) return;
+      history = new History(traits.historyDepth);
+      history.push(grid);
+      selStamp  = null;
+      hoverCell = null;
+      renderer.setGhost(null);
+      editing = false;
+      playing = true;
+      renderer.resumeOrbit();
+      syncUi();
+    }
+
+    function clearCanvas() {
+      if (!editing) return;
+      grid.data.fill(0);
+      renderer.updateLiveLayer(grid);
+    }
+
+    // Selected stamp pattern with rotation/flip applied
+    function transformedPattern(): StampPattern {
+      let pat = selStamp!.pattern;
+      for (let i = 0; i < stampRot; i++) pat = rotatePattern(pat);
+      if (stampFlip) pat = flipPattern(pat);
+      return pat;
+    }
+
+    // Alive cells of the transformed stamp, centered on the anchor; in-bounds only
+    function stampCells(anchor: { row: number; col: number }) {
+      const pat = transformedPattern();
+      const r0 = anchor.row - Math.floor(pat.length / 2);
+      const c0 = anchor.col - Math.floor(pat[0].length / 2);
+      const cells: { row: number; col: number }[] = [];
+      for (let r = 0; r < pat.length; r++) {
+        for (let c = 0; c < pat[r].length; c++) {
+          if (pat[r][c] !== 1) continue;
+          const row = r0 + r;
+          const col = c0 + c;
+          if (row >= 0 && row < N && col >= 0 && col < N) cells.push({ row, col });
+        }
+      }
+      return cells;
+    }
+
+    function refreshGhost() {
+      renderer.setGhost(selStamp && hoverCell ? stampCells(hoverCell) : null);
+    }
+
+    function selectStamp(id: string) {
+      selStamp  = selStamp && selStamp.id === id ? null : (getStampById(id) ?? null);
+      stampRot  = 0;
+      stampFlip = false;
+      refreshGhost();
+      syncUi();
+    }
+
+    function rotateStamp() {
+      if (!selStamp) return;
+      stampRot = (stampRot + 1) % 4;
+      refreshGhost();
+    }
+
+    function flipStamp() {
+      if (!selStamp) return;
+      stampFlip = !stampFlip;
+      refreshGhost();
+    }
+
+    // ── Edit pointer handlers (paint + stamp placement) ─────────────────────
+
+    function onPointerDown(e: PointerEvent) {
+      if (!editing || e.button !== 0) return;
+      const cell = renderer.pickCell(e.clientX, e.clientY);
+      if (!cell) return;
+      if (selStamp) {
+        // OR the stamp into the grid; stays selected for repeat placement
+        for (const { row, col } of stampCells(cell)) grid.data[row * N + col] = 1;
+        renderer.updateLiveLayer(grid);
+        return;
+      }
+      const idx = cell.row * N + cell.col;
+      paintVal = grid.data[idx] === 1 ? 0 : 1;
+      grid.data[idx] = paintVal;
+      renderer.updateLiveLayer(grid);
+      painting = true;
+      canvas.setPointerCapture(e.pointerId);
+    }
+
+    function onPointerMove(e: PointerEvent) {
+      if (!editing) return;
+      const cell = renderer.pickCell(e.clientX, e.clientY);
+      if (painting) {
+        if (!cell) return;
+        const idx = cell.row * N + cell.col;
+        if (grid.data[idx] !== paintVal) {
+          grid.data[idx] = paintVal;
+          renderer.updateLiveLayer(grid);
+        }
+      } else if (selStamp) {
+        hoverCell = cell;
+        refreshGhost();
+      }
+    }
+
+    function onPointerUp() {
+      painting = false;
+    }
+
+    canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('pointerup', onPointerUp);
+    canvas.addEventListener('pointercancel', onPointerUp);
+
+    simRef.current = {
+      playPause, stepBack, stepFwd, scrubTo, restart,
+      enterEdit, clearCanvas, selectStamp, rotateStamp, flipStamp,
+    };
 
     function onKey(e: KeyboardEvent) {
+      if (editing) {
+        if (e.code === 'Space')        { e.preventDefault(); startFromCanvas(); }
+        else if (e.key === 'r' || e.key === 'R') rotateStamp();
+        else if (e.key === 'f' || e.key === 'F') flipStamp();
+        else if (e.key === 'Escape' && selStamp) {
+          selStamp = null;
+          renderer.setGhost(null);
+          syncUi();
+        }
+        return;
+      }
       if (e.code === 'Space') {
         e.preventDefault();
         playPause();
@@ -182,7 +354,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey);
 
-    // ── Main loop — always runs (orbit + pause glide animate every frame) ───
+    // ── Main loop — always runs (orbit + camera glides animate every frame) ─
 
     const STEP_MS = 1000 / 12;
     let lastStep = 0;
@@ -212,17 +384,26 @@ export default function App() {
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', resize);
       window.removeEventListener('keydown', onKey);
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      canvas.removeEventListener('pointermove', onPointerMove);
+      canvas.removeEventListener('pointerup', onPointerUp);
+      canvas.removeEventListener('pointercancel', onPointerUp);
     };
   }, []);
 
   return (
-    // --accent feeds the scrubber thumb color from the active skin
-    <div id="app" style={{ '--accent': FALLBACK_SKIN.accent } as CSSProperties}>
+    // --accent feeds the scrubber/panel highlight color from the active skin
+    <div
+      id="app"
+      className={ui.editing ? 'editing' : ''}
+      style={{ '--accent': FALLBACK_SKIN.accent } as CSSProperties}
+    >
       <canvas ref={canvasRef} id="game-canvas" />
       <div id="ui-overlay">
         <div ref={infoRef} id="info-bar" />
         <Controls
           playing={ui.playing}
+          editing={ui.editing}
           scrubIndex={ui.scrubIndex}
           scrubMax={ui.scrubMax}
           genLabel={ui.genLabel}
@@ -231,7 +412,17 @@ export default function App() {
           onStepFwd={() => simRef.current?.stepFwd()}
           onScrub={k => simRef.current?.scrubTo(k)}
           onRestart={() => simRef.current?.restart()}
+          onEdit={() => simRef.current?.enterEdit()}
+          onClear={() => simRef.current?.clearCanvas()}
         />
+        {ui.editing && (
+          <StampPanel
+            selectedId={ui.selectedStamp}
+            onSelect={id => simRef.current?.selectStamp(id)}
+            onRotate={() => simRef.current?.rotateStamp()}
+            onFlip={() => simRef.current?.flipStamp()}
+          />
+        )}
       </div>
     </div>
   );

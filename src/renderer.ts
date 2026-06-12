@@ -48,6 +48,8 @@ export class Renderer {
   readonly canvas: HTMLCanvasElement;
   skin: Skin;
   tileW: number;
+  private rows: number;
+  private cols: number;
   // Rendered history is capped at `rows` layers (independent of historyDepth)
   // so the tower always reads as a perfect cube: rows × cols × rows.
   private visibleLayers: number;
@@ -58,6 +60,7 @@ export class Renderer {
   private historyMesh: THREE.InstancedMesh;
   private liveMesh: THREE.InstancedMesh;
   private capMesh: THREE.InstancedMesh;
+  private ghostMesh: THREE.InstancedMesh;
   private sun: THREE.DirectionalLight;
   private maxHistoryInstances: number;
 
@@ -89,12 +92,24 @@ export class Renderer {
   private _pausedAmt = 0;
   private _pausedTarget = 0;
   private _aspect = 1;
+  // Edit view: eases 0→1 entering edit mode (camera rises to top-down), back
+  // to 0 on resume. Interpolated inside _positionCamera.
+  private _editAmt = 0;
+  private _editTarget = 0;
+
+  // Picking scratch objects (pickCell) — reused across calls
+  private readonly _raycaster = new THREE.Raycaster();
+  private readonly _ndc       = new THREE.Vector2();
+  private readonly _pickPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  private readonly _hitV3     = new THREE.Vector3();
 
   constructor(config: RendererConfig) {
     const { canvas, skin, tileWidth, rows, cols } = config;
     this.canvas        = canvas;
     this.skin          = skin;
     this.tileW         = tileWidth;
+    this.rows          = rows;
+    this.cols          = cols;
     this.visibleLayers = rows;
 
     // World units visible vertically — grid footprint fills ~60 % of height
@@ -214,14 +229,30 @@ export class Renderer {
     );
     this.capMesh.count = 0;
 
+    // Stamp ghost — translucent accent planes previewing a stamp placement
+    // (edit mode). Floats just above the caps; rebuilt on pointer move.
+    this.ghostMesh = new THREE.InstancedMesh(
+      capPlane,
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(skin.accent),
+        transparent: true,
+        opacity: 0.4,
+        depthWrite: false,
+        fog: false,
+      }),
+      rows * cols,
+    );
+    this.ghostMesh.count = 0;
+
     // Bounding spheres are computed once from initial instance positions and
     // go stale as the tower grows — the camera rises past them and Three.js
     // culls the entire mesh. The camera always faces the tower, so skip culling.
     this.historyMesh.frustumCulled = false;
     this.liveMesh.frustumCulled    = false;
     this.capMesh.frustumCulled     = false;
+    this.ghostMesh.frustumCulled   = false;
 
-    this.scene.add(this.historyMesh, this.liveMesh, this.capMesh);
+    this.scene.add(this.historyMesh, this.liveMesh, this.capMesh, this.ghostMesh);
   }
 
   // ── commitLayer ─────────────────────────────────────────────────────────────
@@ -299,6 +330,15 @@ export class Renderer {
       this._applyProjection();
     }
 
+    // Ease the edit view elevation (iso orbit ↔ top-down); _positionCamera
+    // above already consumed the updated value on the next frame.
+    const eDiff = this._editTarget - this._editAmt;
+    if (eDiff !== 0) {
+      this._editAmt = Math.abs(eDiff) < 0.001
+        ? this._editTarget
+        : this._editAmt + eDiff * Math.min(1, dt * 5);
+    }
+
     this.gl.render(this.scene, this.camera);
   }
 
@@ -314,6 +354,21 @@ export class Renderer {
   resumeOrbit(): void {
     this._angleTarget  = null;
     this._pausedTarget = 0;
+    this._editTarget   = 0;
+  }
+
+  // Edit mode camera: glide to a top-down view with the grid axis-aligned on
+  // screen (angle snaps to k·90°, not the iso corner — squares, not diamonds).
+  // Reuses the paused framing so the canvas clears the right-edge panel.
+  setEditView(active: boolean): void {
+    if (active) {
+      this._editTarget   = 1;
+      this._pausedTarget = 1;
+      this._angleTarget  =
+        Math.round(this._camAngle / (Math.PI / 2)) * (Math.PI / 2);
+    } else {
+      this._editTarget = 0;
+    }
   }
 
   // Single-layer preview (stamp preview / scrubber hover).
@@ -374,10 +429,10 @@ export class Renderer {
   // Write instance matrices for every non-dead cell in grid into liveMesh
   // (dark body cube) and capMesh (accent plane on its top face).
   // makeTranslation is faster than Object3D.updateMatrix (no quaternion path).
-  private _buildCap(grid: Grid): void {
+  private _buildCap(grid: Grid, layerIndex = this.totalCommits): void {
     const { rows, cols, data } = grid;
-    const layerY = this.totalCommits + 0.5; // unit cube: layer i spans y ∈ [i, i+1]
-    const capY   = layerY + 0.5 + 0.01;     // top face + z-fight epsilon
+    const layerY = layerIndex + 0.5;    // unit cube: layer i spans y ∈ [i, i+1]
+    const capY   = layerY + 0.5 + 0.01; // top face + z-fight epsilon
     let count = 0;
 
     for (let r = 0; r < rows; r++) {
@@ -419,17 +474,66 @@ export class Renderer {
     this.sun.target.updateMatrixWorld();
   }
 
-  // Place the camera on the orbit circle around the current pivot, keeping
-  // the elevation of the classic (1,1,1) iso view: for distance D the
-  // vertical offset is D/√3 and the horizontal radius D·√(2/3).
+  // Place the camera on the orbit circle around the current pivot. Elevation
+  // interpolates between the classic (1,1,1) iso view (vertical D/√3,
+  // horizontal radius D·√(2/3)) and top-down for edit mode (_editAmt → 1).
+  // A small residual radius keeps lookAt's up-vector well defined overhead.
   private _positionCamera(): void {
     const D = this.frustumH * 2;
-    const R = D * Math.sqrt(2 / 3);
+    const e = this._editAmt;
+    const R = D * Math.sqrt(2 / 3) * (1 - e) + D * 0.02 * e;
+    const Y = (D / Math.sqrt(3)) * (1 - e) + D * e;
     this.camera.position.set(
       this._camPivot.x + R * Math.cos(this._camAngle),
-      this._camPivot.y + D / Math.sqrt(3),
+      this._camPivot.y + Y,
       this._camPivot.z + R * Math.sin(this._camAngle),
     );
     this.camera.lookAt(this._camPivot);
+  }
+
+  // ── Edit mode support ────────────────────────────────────────────────────────
+
+  // Re-render the live (top) layer in place after a paint/stamp edit.
+  updateLiveLayer(grid: Grid): void {
+    this._buildCap(grid, this.totalCommits - 1);
+    this.gl.shadowMap.needsUpdate = true;
+  }
+
+  // Pixel → grid cell on the live layer's top face. Null outside the grid.
+  pickCell(clientX: number, clientY: number): { row: number; col: number } | null {
+    const rect = this.canvas.getBoundingClientRect();
+    this._ndc.set(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this._raycaster.setFromCamera(this._ndc, this.camera);
+
+    // Plane y = totalCommits (live layer top face): normal·p + constant = 0
+    this._pickPlane.constant = -this.totalCommits;
+    const hit = this._raycaster.ray.intersectPlane(this._pickPlane, this._hitV3);
+    if (!hit) return null;
+
+    const col = Math.floor(hit.x + this.cols / 2);
+    const row = Math.floor(hit.z + this.rows / 2);
+    if (row < 0 || row >= this.rows || col < 0 || col >= this.cols) return null;
+    return { row, col };
+  }
+
+  // Stamp placement preview — translucent accent planes above the live caps.
+  setGhost(cells: { row: number; col: number }[] | null): void {
+    const n = cells ? cells.length : 0;
+    if (cells) {
+      const y = this.totalCommits + 0.03;
+      for (let i = 0; i < n; i++) {
+        this._mat.makeTranslation(
+          cells[i].col - this.cols / 2 + 0.5,
+          y,
+          cells[i].row - this.rows / 2 + 0.5,
+        );
+        this.ghostMesh.setMatrixAt(i, this._mat);
+      }
+      this.ghostMesh.instanceMatrix.needsUpdate = true;
+    }
+    this.ghostMesh.count = n;
   }
 }
