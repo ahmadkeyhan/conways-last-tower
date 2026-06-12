@@ -39,7 +39,7 @@ export default function App() {
     const N = traits.gridSize;
 
     let history = new History(traits.historyDepth);
-    let grid = randomizeGrid(createGrid(N, N), 0.05, rng);
+    let grid = randomizeGrid(createGrid(N, N), 0.35, rng);
     history.push(grid);
 
     const tileW = Math.min(32, Math.max(4, Math.floor((window.innerWidth * 0.7) / N)));
@@ -184,7 +184,7 @@ export default function App() {
 
     // ── Main loop — always runs (orbit + pause glide animate every frame) ───
 
-    const STEP_MS = 1000 / 8;
+    const STEP_MS = 1000 / 12;
     let lastStep = 0;
     let raf = 0;
     let running = true;
