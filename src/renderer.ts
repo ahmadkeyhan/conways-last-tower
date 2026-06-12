@@ -61,6 +61,7 @@ export class Renderer {
   private liveMesh: THREE.InstancedMesh;
   private capMesh: THREE.InstancedMesh;
   private ghostMesh: THREE.InstancedMesh;
+  private editGrid: THREE.GridHelper;
   private sun: THREE.DirectionalLight;
   private maxHistoryInstances: number;
 
@@ -244,6 +245,19 @@ export class Renderer {
     );
     this.ghostMesh.count = 0;
 
+    // Edit-mode grid — cell boundaries on the canvas plane. Fades in with the
+    // top-down glide (opacity tracks _editAmt in render); rides the live
+    // layer's top face via _trackCamera.
+    this.editGrid = new THREE.GridHelper(rows, rows, 0xffffff, 0xffffff);
+    {
+      const mat = this.editGrid.material as THREE.LineBasicMaterial;
+      mat.transparent = true;
+      mat.opacity     = 0;
+      // Not fog-patched (see capMesh note) — default depth fog would hide it
+      mat.fog         = false;
+    }
+    this.editGrid.visible = false;
+
     // Bounding spheres are computed once from initial instance positions and
     // go stale as the tower grows — the camera rises past them and Three.js
     // culls the entire mesh. The camera always faces the tower, so skip culling.
@@ -251,8 +265,11 @@ export class Renderer {
     this.liveMesh.frustumCulled    = false;
     this.capMesh.frustumCulled     = false;
     this.ghostMesh.frustumCulled   = false;
+    this.editGrid.frustumCulled    = false;
 
-    this.scene.add(this.historyMesh, this.liveMesh, this.capMesh, this.ghostMesh);
+    this.scene.add(
+      this.historyMesh, this.liveMesh, this.capMesh, this.ghostMesh, this.editGrid,
+    );
   }
 
   // ── commitLayer ─────────────────────────────────────────────────────────────
@@ -337,6 +354,10 @@ export class Renderer {
       this._editAmt = Math.abs(eDiff) < 0.001
         ? this._editTarget
         : this._editAmt + eDiff * Math.min(1, dt * 5);
+      // Edit grid fades in/out with the glide
+      this.editGrid.visible = this._editAmt > 0.01;
+      (this.editGrid.material as THREE.LineBasicMaterial).opacity =
+        0.22 * this._editAmt;
     }
 
     this.gl.render(this.scene, this.camera);
@@ -464,6 +485,8 @@ export class Renderer {
 
     // Height-fog reference: world Y of the live layer's top face
     this._towerTopY.value = this.totalCommits;
+    // Edit grid rides the canvas plane (epsilon above the caps)
+    this.editGrid.position.y = this.totalCommits + 0.02;
     this._camPivot.set(0, pivotY, 0);
     this._positionCamera();
 

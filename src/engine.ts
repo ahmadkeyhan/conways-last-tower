@@ -3,22 +3,48 @@
 export type CellState = 0 | 1 | 2; // 0=dead  1=alive  2=dying (Brian's Brain)
 
 // Read-only grid view — used by History snapshots and Renderer.
-// index = row * cols + col
+// Dense rows × cols layout: index = row * cols + col
 export type Grid = {
   readonly rows: number;
   readonly cols: number;
   readonly data: Uint8Array;
 };
 
+// Invisible simulation margin around the visible grid (cells per side).
+// Patterns walk off the viewport and keep evolving out of sight; they die at
+// the true outer boundary ~MARGIN cells away, so no splash is ever visible
+// at the viewport edge.
+export const MARGIN = 20;
+
 // Live simulation buffer — owns both front (data) and back arrays.
 // step() writes into back and returns the pair swapped; no Uint8Array is
 // allocated per generation once a GridBuffer exists.
+//
+// GHOST MARGIN: data/back are (rows + 2·MARGIN) × (cols + 2·MARGIN). The
+// whole margin is simulated except its outermost 1-cell ring, which is
+// permanently dead and never written — it gives boundary cells correct
+// neighbor counts with zero special-casing (no torus wrap, no asymmetric
+// edge counting). The visible/playable world is the centered rows × cols
+// region; use setCell/getCell or innerSnapshot to access it.
+//   internal index = (row + MARGIN) * (cols + 2·MARGIN) + (col + MARGIN)
 export type GridBuffer = {
   readonly rows: number;
   readonly cols: number;
-  readonly data: Uint8Array; // current generation (front)
+  readonly data: Uint8Array; // current generation (front), margin-padded
   readonly back: Uint8Array; // write scratch — do not read externally
 };
+
+// A Grid is either a dense snapshot or a margin-padded buffer; the data
+// length tells them apart. All accessors below handle both layouts.
+function isPadded(grid: Grid): boolean {
+  return grid.data.length === (grid.rows + 2 * MARGIN) * (grid.cols + 2 * MARGIN);
+}
+
+function cellIndex(grid: Grid, row: number, col: number): number {
+  return isPadded(grid)
+    ? (row + MARGIN) * (grid.cols + 2 * MARGIN) + (col + MARGIN)
+    : row * grid.cols + col;
+}
 
 // ── Rulesets ──────────────────────────────────────────────────────────────────
 
@@ -39,54 +65,96 @@ export type RulesetName = keyof typeof RULESETS;
 // ── Grid primitives ───────────────────────────────────────────────────────────
 
 export function createGrid(rows: number, cols: number): GridBuffer {
+  const size = (rows + 2 * MARGIN) * (cols + 2 * MARGIN); // margin-padded
   return {
     rows, cols,
-    data: new Uint8Array(rows * cols),
-    back: new Uint8Array(rows * cols),
+    data: new Uint8Array(size),
+    back: new Uint8Array(size),
   };
 }
 
-// Produces a new GridBuffer from any Grid — copies data, allocates fresh back.
+// Produces a new margin-padded GridBuffer from any Grid (dense snapshot or
+// padded buffer) — copies the cell data, allocates a fresh back buffer.
+// Dense sources start with an empty margin.
 export function cloneGrid(grid: Grid): GridBuffer {
-  return {
-    rows: grid.rows, cols: grid.cols,
-    data: grid.data.slice(),
-    back: new Uint8Array(grid.rows * grid.cols),
-  };
+  const buf = createGrid(grid.rows, grid.cols);
+  if (isPadded(grid)) {
+    buf.data.set(grid.data);
+  } else {
+    const { rows, cols, data } = grid;
+    const stride = cols + 2 * MARGIN;
+    for (let r = 0; r < rows; r++) {
+      buf.data.set(data.subarray(r * cols, (r + 1) * cols), (r + MARGIN) * stride + MARGIN);
+    }
+  }
+  return buf;
+}
+
+// Dense rows × cols copy of the visible region — the layout History stores
+// and the renderer consumes. Always returns a fresh copy.
+export function innerSnapshot(grid: Grid): Grid {
+  const { rows, cols } = grid;
+  if (!isPadded(grid)) return { rows, cols, data: grid.data.slice() };
+  const out = new Uint8Array(rows * cols);
+  const stride = cols + 2 * MARGIN;
+  for (let r = 0; r < rows; r++) {
+    const base = (r + MARGIN) * stride + MARGIN;
+    out.set(grid.data.subarray(base, base + cols), r * cols);
+  }
+  return { rows, cols, data: out };
 }
 
 export function setCell(grid: Grid, row: number, col: number, state: CellState): void {
-  grid.data[row * grid.cols + col] = state;
+  grid.data[cellIndex(grid, row, col)] = state;
 }
 
 export function getCell(grid: Grid, row: number, col: number): CellState {
-  return grid.data[row * grid.cols + col] as CellState;
+  return grid.data[cellIndex(grid, row, col)] as CellState;
 }
 
-// Returns a new GridBuffer with the front randomized; does not mutate the source.
+// Returns a new GridBuffer with the visible region randomized; does not
+// mutate the source. The margin starts empty (dead).
 export function randomizeGrid(grid: Grid, density = 0.3, rng = Math.random): GridBuffer {
-  const size = grid.rows * grid.cols;
-  const data = new Uint8Array(size);
-  for (let i = 0; i < size; i++) data[i] = rng() < density ? 1 : 0;
-  return { rows: grid.rows, cols: grid.cols, data, back: new Uint8Array(size) };
+  const buf = createGrid(grid.rows, grid.cols);
+  const stride = grid.cols + 2 * MARGIN;
+  for (let r = 0; r < grid.rows; r++) {
+    const base = (r + MARGIN) * stride + MARGIN;
+    for (let c = 0; c < grid.cols; c++) {
+      buf.data[base + c] = rng() < density ? 1 : 0;
+    }
+  }
+  return buf;
 }
 
 // ── Neighbor counting (exported utility; NOT inlined inside step) ─────────────
 
 export function countAliveNeighbors(grid: Grid, row: number, col: number): number {
   const { rows, cols, data } = grid;
+  if (isPadded(grid)) {
+    // Neighbor reads fall into the simulated margin naturally for edge cells
+    const stride = cols + 2 * MARGIN;
+    const i = (row + MARGIN) * stride + (col + MARGIN);
+    return (data[i - stride - 1] & 1) + (data[i - stride] & 1) + (data[i - stride + 1] & 1)
+         + (data[i - 1] & 1)                                   + (data[i + 1] & 1)
+         + (data[i + stride - 1] & 1) + (data[i + stride] & 1) + (data[i + stride + 1] & 1);
+  }
+  // Dense snapshot: skip out-of-bounds neighbors (bounded plane)
   let n = 0;
   for (let dr = -1; dr <= 1; dr++) {
     for (let dc = -1; dc <= 1; dc++) {
       if (dr === 0 && dc === 0) continue;
-      const nr = (row + dr + rows) % rows;
-      const nc = (col + dc + cols) % cols;
+      const nr = row + dr;
+      const nc = col + dc;
+      if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
       if (data[nr * cols + nc] === 1) n++;
     }
   }
   return n;
 }
 
+// Counts the whole buffer: for padded grids this includes live cells in the
+// invisible margin (alive anywhere in the simulated world), for dense
+// snapshots just the visible region.
 export function countAlive(grid: Grid): number {
   let n = 0;
   const { data } = grid;
@@ -100,36 +168,42 @@ export function countAlive(grid: Grid): number {
 // with data/back swapped — zero Uint8Array allocations per call.
 //
 // Inner-loop optimisations:
-//   • Pre-compute wrapped row offsets (rp, rc, rn) once per row — eliminates
-//     the per-column modulo inside the column loop.
+//   • Ghost margin: the simulated region is everything except the outermost
+//     1-cell ring of the padded buffer, which is permanently dead and never
+//     written — every neighbor read lands on a simulated cell or that dead
+//     ring, so there are no wrap ternaries, bounds checks, or edge special
+//     cases anywhere in the loop. Patterns evolve up to MARGIN−1 cells past
+//     the viewport before dying at the true boundary, out of sight.
 //   • Uint8Array[9] born/survive lookup tables replace Array.includes (O(1)
 //     typed-array load vs. O(k) linear scan on every cell).
 //   • Standard-ruleset neighbor sum is a direct data[offset] addition —
 //     valid because standard rulesets only produce states 0 and 1.
 //   • Brian's Brain uses `& 1` to mask dying cells (state 2) from the count.
+//
+// The outer ring of `back` is never written, so it stays dead across swaps.
 
 export function step(buf: GridBuffer, ruleset: Ruleset): GridBuffer {
   const { rows, cols } = buf;
+  const stride   = cols + 2 * MARGIN;     // padded row width
+  const simRows  = rows + 2 * MARGIN - 2; // simulated region: all but the outer ring
+  const simCols  = cols + 2 * MARGIN - 2;
   const read  = buf.data;
   const write = buf.back;
 
   if (ruleset.kind === 'brain') {
-    for (let r = 0; r < rows; r++) {
-      const rp = (r === 0        ? rows - 1 : r - 1) * cols;
-      const rc = r * cols;
-      const rn = (r === rows - 1 ? 0        : r + 1) * cols;
+    for (let r = 0; r < simRows; r++) {
+      const base = (r + 1) * stride + 1; // +1: skip the dead outer ring
 
-      for (let c = 0; c < cols; c++) {
-        const state = read[rc + c];
-        if (state === 1) { write[rc + c] = 2; continue; }
-        if (state === 2) { write[rc + c] = 0; continue; }
+      for (let c = 0; c < simCols; c++) {
+        const i = base + c;
+        const state = read[i];
+        if (state === 1) { write[i] = 2; continue; }
+        if (state === 2) { write[i] = 0; continue; }
 
-        const cp = c === 0        ? cols - 1 : c - 1;
-        const cn = c === cols - 1 ? 0        : c + 1;
-        const n  = (read[rp + cp] & 1) + (read[rp + c] & 1) + (read[rp + cn] & 1)
-                 + (read[rc + cp] & 1)                       + (read[rc + cn] & 1)
-                 + (read[rn + cp] & 1) + (read[rn + c] & 1) + (read[rn + cn] & 1);
-        write[rc + c] = n === 2 ? 1 : 0;
+        const n = (read[i - stride - 1] & 1) + (read[i - stride] & 1) + (read[i - stride + 1] & 1)
+                + (read[i - 1] & 1)                                   + (read[i + 1] & 1)
+                + (read[i + stride - 1] & 1) + (read[i + stride] & 1) + (read[i + stride + 1] & 1);
+        write[i] = n === 2 ? 1 : 0;
       }
     }
   } else {
@@ -138,20 +212,17 @@ export function step(buf: GridBuffer, ruleset: Ruleset): GridBuffer {
     for (const b of ruleset.born)    bornSet[b]    = 1;
     for (const s of ruleset.survive) surviveSet[s] = 1;
 
-    for (let r = 0; r < rows; r++) {
-      const rp = (r === 0        ? rows - 1 : r - 1) * cols;
-      const rc = r * cols;
-      const rn = (r === rows - 1 ? 0        : r + 1) * cols;
+    for (let r = 0; r < simRows; r++) {
+      const base = (r + 1) * stride + 1; // +1: skip the dead outer ring
 
-      for (let c = 0; c < cols; c++) {
-        const cp = c === 0        ? cols - 1 : c - 1;
-        const cn = c === cols - 1 ? 0        : c + 1;
+      for (let c = 0; c < simCols; c++) {
+        const i = base + c;
 
-        const n = read[rp + cp] + read[rp + c] + read[rp + cn]
-                + read[rc + cp]                 + read[rc + cn]
-                + read[rn + cp] + read[rn + c]  + read[rn + cn];
+        const n = read[i - stride - 1] + read[i - stride] + read[i - stride + 1]
+                + read[i - 1]                             + read[i + 1]
+                + read[i + stride - 1] + read[i + stride] + read[i + stride + 1];
 
-        write[rc + c] = read[rc + c] === 1 ? surviveSet[n] : bornSet[n];
+        write[i] = read[i] === 1 ? surviveSet[n] : bornSet[n];
       }
     }
   }
@@ -173,7 +244,9 @@ export class History {
   constructor(maxDepth: number) { this.maxDepth = maxDepth; }
 
   push(buf: Grid): void {
-    this.stack.push({ rows: buf.rows, cols: buf.cols, data: buf.data.slice() });
+    // innerSnapshot de-pads ghost-bordered buffers and copies dense ones —
+    // the stack always holds dense rows × cols snapshots.
+    this.stack.push(innerSnapshot(buf));
     this._total++;
     if (this.stack.length > this.maxDepth) this.stack.shift();
   }
@@ -203,7 +276,7 @@ export function printGrid(grid: Grid): string {
   for (let r = 0; r < rows; r++) {
     let line = '';
     for (let c = 0; c < cols; c++) {
-      const s = data[r * cols + c];
+      const s = data[cellIndex(grid, r, c)];
       line += s === 0 ? '.' : s === 1 ? '#' : 'o';
     }
     lines.push(line);
@@ -288,8 +361,40 @@ export function runEngineTest(): void {
   console.log('total after trim=6:', hist.totalGenerations === 6 ? 'PASS' : `FAIL (${hist.totalGenerations})`);
   console.groupEnd();
 
-  // ── 6. Benchmark ─────────────────────────────────────────────────────────
-  console.group('6. Benchmark — 100 gens on 100×100 (Classic)');
+  // ── 6. Ghost margin — no wrap, off-screen evolution ───────────────────────
+  console.group('6. Ghost margin — no wrap, off-screen evolution');
+  // (0,0), (0,7) and (7,0) are mutual neighbors on a torus (each would have
+  // 2 and survive); with the margin they are isolated and die.
+  const gb = createGrid(8, 8);
+  alive(gb, [0,0],[0,7],[7,0]);
+  const gb1 = step(gb, RULESETS.classic);
+  console.log('no torus wrap (corners die) ✓:', countAlive(gb1) === 0 ? 'PASS' : 'FAIL');
+
+  // A blinker on the top visible edge oscillates one cell into the invisible
+  // margin and back — the old 1-cell dead border would have mangled it.
+  let bl = createGrid(8, 8);
+  alive(bl, [0,3],[0,4],[0,5]);
+  bl = step(bl, RULESETS.classic);
+  const worldAlive = countAlive(bl);                 // includes margin
+  const visAlive   = countAlive(innerSnapshot(bl));  // visible only
+  console.log('cell lives off-screen ✓:', (worldAlive === 3 && visAlive === 2) ? 'PASS' : 'FAIL');
+  bl = step(bl, RULESETS.classic);
+  console.log('returns on-screen ✓:', countAlive(innerSnapshot(bl)) === 3 ? 'PASS' : 'FAIL');
+
+  // The outermost ring of the padded buffer must stay dead after stepping
+  let ringClean = true;
+  const gbStride = 8 + 2 * MARGIN;
+  for (let i = 0; i < gb1.data.length; i++) {
+    const r = Math.floor(i / gbStride);
+    const c = i % gbStride;
+    const onRing = r === 0 || r === gbStride - 1 || c === 0 || c === gbStride - 1;
+    if (onRing && gb1.data[i] !== 0) { ringClean = false; break; }
+  }
+  console.log('outer ring clean ✓:', ringClean ? 'PASS' : 'FAIL');
+  console.groupEnd();
+
+  // ── 7. Benchmark ─────────────────────────────────────────────────────────
+  console.group('7. Benchmark — 100 gens on 100×100 (Classic)');
   // Seeded LCG so the benchmark is reproducible without the fxhash shim
   let seed = 0xdeadbeef;
   const lcg = (): number => {

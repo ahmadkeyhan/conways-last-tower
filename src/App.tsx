@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { createGrid, randomizeGrid, step, cloneGrid, History, RULESETS } from './engine';
+import {
+  createGrid, randomizeGrid, step, cloneGrid, History, RULESETS,
+  getCell, setCell, innerSnapshot,
+} from './engine';
 import type { Grid } from './engine';
 import { Renderer } from './renderer';
 import Controls from './Controls';
@@ -70,8 +73,10 @@ export default function App() {
     resize();
     window.addEventListener('resize', resize);
 
-    // Commit the initial generation so there is always one layer in cache
-    renderer.commitLayer(grid);
+    // Commit the initial generation so there is always one layer in cache.
+    // The live GridBuffer is ghost-padded — the renderer always receives
+    // dense snapshots (history entries or innerSnapshot copies).
+    renderer.commitLayer(history.peek()!);
 
     // ── Sim control state ───────────────────────────────────────────────────
     // Mutable state lives here (the RAF loop reads it); React state mirrors
@@ -163,7 +168,7 @@ export default function App() {
         // (grid is untouched by scrubbing, so it is still the live buffer.)
         grid = step(grid, ruleset);
         history.push(grid);
-        renderer.commitLayer(grid);
+        renderer.commitLayer(history.peek()!);
         scrubLayers = history.toArray();
         scrubIndex  = scrubLayers.length - 1;
         syncUi();
@@ -182,7 +187,7 @@ export default function App() {
       history = new History(traits.historyDepth);
       grid = randomizeGrid(createGrid(N, N), 0.35, rng);
       history.push(grid);
-      renderer.rebuildCache([grid]);
+      renderer.rebuildCache([history.peek()!]);
       scrubLayers = null;
       scrubIndex  = 0;
       editing  = false;
@@ -205,8 +210,8 @@ export default function App() {
       }
       scrubLayers = null;
       editing = true;
-      renderer.setEditView(true);          // glide to top-down, axis-aligned
-      renderer.rebuildCache([grid]);       // collapse tower to the canvas layer
+      renderer.setEditView(true);                    // glide to top-down, axis-aligned
+      renderer.rebuildCache([innerSnapshot(grid)]);  // collapse tower to the canvas layer
       syncUi();
     }
 
@@ -226,8 +231,8 @@ export default function App() {
 
     function clearCanvas() {
       if (!editing) return;
-      grid.data.fill(0);
-      renderer.updateLiveLayer(grid);
+      grid.data.fill(0); // ghost ring is already 0 — fill is safe
+      renderer.updateLiveLayer(innerSnapshot(grid));
     }
 
     // Selected stamp pattern with rotation/flip applied
@@ -287,14 +292,13 @@ export default function App() {
       if (!cell) return;
       if (selStamp) {
         // OR the stamp into the grid; stays selected for repeat placement
-        for (const { row, col } of stampCells(cell)) grid.data[row * N + col] = 1;
-        renderer.updateLiveLayer(grid);
+        for (const { row, col } of stampCells(cell)) setCell(grid, row, col, 1);
+        renderer.updateLiveLayer(innerSnapshot(grid));
         return;
       }
-      const idx = cell.row * N + cell.col;
-      paintVal = grid.data[idx] === 1 ? 0 : 1;
-      grid.data[idx] = paintVal;
-      renderer.updateLiveLayer(grid);
+      paintVal = getCell(grid, cell.row, cell.col) === 1 ? 0 : 1;
+      setCell(grid, cell.row, cell.col, paintVal);
+      renderer.updateLiveLayer(innerSnapshot(grid));
       painting = true;
       canvas.setPointerCapture(e.pointerId);
     }
@@ -304,10 +308,9 @@ export default function App() {
       const cell = renderer.pickCell(e.clientX, e.clientY);
       if (painting) {
         if (!cell) return;
-        const idx = cell.row * N + cell.col;
-        if (grid.data[idx] !== paintVal) {
-          grid.data[idx] = paintVal;
-          renderer.updateLiveLayer(grid);
+        if (getCell(grid, cell.row, cell.col) !== paintVal) {
+          setCell(grid, cell.row, cell.col, paintVal);
+          renderer.updateLiveLayer(innerSnapshot(grid));
         }
       } else if (selStamp) {
         hoverCell = cell;
@@ -367,7 +370,7 @@ export default function App() {
       if (playing && t - lastStep >= STEP_MS) {
         grid = step(grid, ruleset);
         history.push(grid);
-        renderer.commitLayer(grid);
+        renderer.commitLayer(history.peek()!);
         lastStep = t;
         updateInfo(`Gen ${history.totalGenerations}  |  ${traits.ruleset}  |  ${N}×${N}  |  tile ${tileW}px`);
       }
