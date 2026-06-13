@@ -98,6 +98,11 @@ export class Renderer {
   private readonly _towerNoise:  THREE.Color;
   private readonly _accentMain:  THREE.Color;
   private readonly _accentNoise: THREE.Color;
+  // Brian's Brain dying cells (state 2) — a dim, desaturated tone that's
+  // distinct from both the tower body and the bright accent caps. The cap gets
+  // the brighter base tone; the cube a darkened version (fading embers).
+  private readonly _dyingColor:  THREE.Color; // cube body
+  private readonly _dyingCap:    THREE.Color; // top-face cap
 
   // Reusable scratch objects — avoid per-frame allocations
   private readonly _mat  = new THREE.Matrix4();
@@ -142,6 +147,11 @@ export class Renderer {
     this._towerNoise  = new THREE.Color(skin.towerNoiseColor);
     this._accentMain  = new THREE.Color(skin.accentColor);
     this._accentNoise = new THREE.Color(skin.accentNoiseColor);
+    // Dying cells (Brian's Brain) use the skin's triadic dying hue — unrelated
+    // to tower or accent. Cap uses it as-is; the cube is darkened (fading embers).
+    const dying = new THREE.Color(skin.dyingColor);
+    this._dyingCap    = dying;
+    this._dyingColor  = dying.clone().multiplyScalar(0.7);
 
     // World units visible vertically — grid footprint fills ~60 % of height
     this.frustumH = (rows + cols) * 0.7;
@@ -295,7 +305,7 @@ export class Renderer {
     const groundGeo = new THREE.BoxGeometry(cols * 1.37, rows * 1.37,cols*2);
     groundGeo.rotateX(-Math.PI / 2); // lie flat, facing +Y
     const groundMat = new THREE.MeshStandardMaterial({
-      color: this._towerNoise,
+      color: new THREE.Color(skin.groundColor),
       roughness: 0.95,
       metalness: 0.0,
     });
@@ -566,19 +576,23 @@ export class Renderer {
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        if (data[r * cols + c] === 0) continue;
+        const state = data[r * cols + c];
+        if (state === 0) continue;
         const x = c - cols / 2 + 0.5;
         const z = r - rows / 2 + 0.5;
         this._mat.makeTranslation(x, layerY, z);
         this.liveMesh.setMatrixAt(count, this._mat);
         this._mat.makeTranslation(x, capY, z);
         this.capMesh.setMatrixAt(count, this._mat);
-        // Per-cube noise color — independent hash draws (different salts)
-        // so the cap speckle doesn't mirror the body speckle.
-        this.liveMesh.setColorAt(count, cellNoise(r, c, layerIndex, 0x9e3779b9)
-          ? this._towerNoise : this._towerMain);
-        this.capMesh.setColorAt(count, cellNoise(r, c, layerIndex, 0x517cc1b7)
-          ? this._accentNoise : this._accentMain);
+        // Body color: dying cells (Brian's Brain state 2) get the flat accent
+        // as a clear "fading" indicator; living cells use the speckled tower
+        // colors (independent hash draws so cap speckle ≠ body speckle).
+        this.liveMesh.setColorAt(count, state === 2
+          ? this._dyingColor
+          : (cellNoise(r, c, layerIndex, 0x9e3779b9) ? this._towerNoise : this._towerMain));
+        this.capMesh.setColorAt(count, state === 2
+          ? this._dyingCap
+          : (cellNoise(r, c, layerIndex, 0x517cc1b7) ? this._accentNoise : this._accentMain));
         count++;
       }
     }

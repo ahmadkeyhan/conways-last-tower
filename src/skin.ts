@@ -11,6 +11,11 @@ export type Skin = {
   // Live-layer cap planes: same noise treatment with the accent pair.
   accentColor:      string;
   accentNoiseColor: string;
+  // Dying cells (Brian's Brain) — a triadic hue unrelated to tower/accent.
+  dyingColor:       string;
+  // Ground slab — always the base hue (tower tone), even when brain swaps the
+  // tower hue, so the ground stays the world's base color.
+  groundColor:      string;
   backgroundColor: string;
   gridColor:       string; // edit-mode grid lines (opacity applied in renderer)
 };
@@ -61,9 +66,16 @@ const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 //     a noticeable-contrast cap.
 //   • Saturation spans a wide range across tokens for trait variety.
 // Draw order is fixed so the same seed always yields the same palette.
-export function deriveSkin(rng: () => number): Skin {
+export function deriveSkin(rng: () => number, swapTowerDying = false): Skin {
   const family  = FAMILIES[Math.floor(rng() * FAMILIES.length)];
   const baseHue = family.hue + (rng() * 2 - 1) * 12; // jitter within the family
+
+  // Brian's Brain (swapTowerDying): the dying state is everywhere, so swap the
+  // tower and dying hues — the living tower takes the triadic (baseHue+120°) and
+  // pops, while dying cells take the base hue and recede into the same-hue sky.
+  const triadic  = (baseHue + 120) % 360;
+  const towerHue = swapTowerDying ? triadic : baseHue;
+  const dyingHue = swapTowerDying ? baseHue : triadic;
 
   // Squared draw biases toward the low end: most towers read as muted stone,
   // a minority reach into richer saturation.
@@ -84,11 +96,19 @@ export function deriveSkin(rng: () => number): Skin {
     id:   family.name.toLowerCase(),
     name: family.name,
 
-    towerColor:      hslToHex(baseHue, towerSat, towerL),
-    towerNoiseColor: hslToHex(baseHue, towerSat * 0.9, towerL - 0.10),
+    towerColor:      hslToHex(towerHue, towerSat, towerL),
+    towerNoiseColor: hslToHex(towerHue, towerSat * 0.9, towerL - 0.10),
 
     accentColor:      hslToHex(accentHue, accentSat, accentL),
     accentNoiseColor: hslToHex(accentHue, accentSat * 0.95, accentL - 0.1),
+
+    // Tower & dying share saturation/lightness; only their hue differs (and
+    // swaps for Brian's Brain — see towerHue/dyingHue above).
+    dyingColor: hslToHex(dyingHue, towerSat, towerL),
+
+    // Ground always uses the base hue at the noise tone (matches towerNoiseColor
+    // for non-brain; stays base-hue when brain swaps the tower hue to triadic).
+    groundColor: hslToHex(baseHue, towerSat * 0.9, towerL - 0.10),
 
     backgroundColor: hslToHex(baseHue, bgSat, bgL),
     gridColor:       hslToHex(accentHue, 0.40, 0.85),
@@ -104,6 +124,9 @@ export const FALLBACK_SKIN: Skin = {
 
   towerColor:      'hsl(0, 0%, 41%)',
   towerNoiseColor: 'hsl(0, 0%, 27%)',
+
+  dyingColor:      'hsl(140, 60%, 52%)',
+  groundColor:     'hsl(0, 0%, 27%)',
 
   backgroundColor: 'hsl(0, 0%, 12%)',
   gridColor:       '#ffffff',

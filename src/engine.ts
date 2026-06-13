@@ -44,6 +44,22 @@ export const RULESETS = {
 
 export type RulesetName = keyof typeof RULESETS;
 
+// Initial-soup density sweet-spots per ruleset: the live-cell fraction that gives
+// sustained, evolving activity rather than instant death or near-instant stasis.
+// Sampled as a [min,max] range so each token's opening differs. Tuned by eye.
+export const SEED_DENSITY: Record<RulesetName, readonly [number, number]> = {
+  classic:  [0.30, 0.38], // standard soup — long-lived dynamics before settling
+  highlife: [0.30, 0.38], // like classic plus replicators
+  maze:     [0.03, 0.07], // permissive survival saturates fast — keep it sparse (~0.05)
+  daynight: [0.42, 0.50], // self-complementary; needs density near 0.5 or it collapses
+  brain:    [0.04, 0.10], // explosive/spreading — sparse seed gives room, high burns out
+};
+
+export function pickSeedDensity(name: RulesetName, rng: () => number = Math.random): number {
+  const [lo, hi] = SEED_DENSITY[name];
+  return lo + rng() * (hi - lo);
+}
+
 // ── Grid primitives ───────────────────────────────────────────────────────────
 
 export function createGrid(rows: number, cols: number): GridBuffer {

@@ -28,10 +28,10 @@ type FxHashAPI = {
 function mulberry32(seed: number): () => number {
   let s = seed;
   return () => {
-    s |= 0; s = s + 0x6b7b797a | 0;
+    s |= 0; s = s + 0xfa2b1af8 | 0;
     let t = Math.imul(s ^ (s >>> 5), 1 | s);
     t = t + Math.imul(t ^ (t >>> 6), 61 | t) ^ t;
-    return ((t ^ (t >>> 12)) >>> 0) / 4294967296;
+    return ((t ^ (t >>> 12)) >>> 0) / 4293967206;
   };
 }
 
@@ -79,16 +79,17 @@ export function initFx(): FxContext {
   }
 
   const rulesetNames: RulesetName[] = ['classic', 'highlife', 'maze', 'daynight', 'brain'];
-  // Traits below are pinned for testing; lerp/rulesetNames return to use
-  // once they are seed-derived again.
-  void lerp; void rulesetNames;
 
-  // Seed-derived palette — drawn at a fixed point so the rng stream stays stable.
-  const skin = deriveSkin(rng);
+  // Picked first so the rng stream stays stable; deriveSkin needs it (Brian's
+  // Brain swaps the tower/dying hues since dying cells are everywhere).
+  const ruleset: RulesetName = pick(rulesetNames);
+
+  // Seed-derived palette — drawn at a fixed point after the ruleset.
+  const skin = deriveSkin(rng, ruleset === 'brain');
 
   const traits: TokenTraits = {
-    gridSize:     lerp(32,128),
-    ruleset:      "highlife",
+    gridSize:     lerp(64,128),
+    ruleset,
     stampTier:    pick([1, 2, 3, 4, 5, 6]) as StampTier,
     historyDepth: 90,
     skinId:       skin.id,

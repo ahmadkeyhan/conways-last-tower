@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   createGrid, randomizeGrid, step, cloneGrid, History, RULESETS,
-  getCell, setCell, innerSnapshot, countAlive,
+  getCell, setCell, innerSnapshot, countAlive, pickSeedDensity,
 } from './engine';
 import type { Grid } from './engine';
 import { Renderer } from './renderer';
@@ -73,7 +73,11 @@ export default function App() {
     let   gridN = N;                    // current active grid size (editable)
 
     let history = new History(traits.historyDepth);
-    let grid = randomizeGrid(createGrid(gridN, gridN), 0.35, rng);
+    // The opening soup is a token trait: density sampled once per seed, captured
+    // immutably so Restart can replay the exact same generation 0.
+    const seedDensity = pickSeedDensity(traits.ruleset, rng);
+    let grid = randomizeGrid(createGrid(gridN, gridN), seedDensity, rng);
+    const initialSoup = cloneGrid(grid); // token's gen-0, captured once at size N
     history.push(grid);
 
     const tileFor = (n: number) =>
@@ -207,12 +211,12 @@ export default function App() {
       else play();
     }
 
-    // Fresh randomized grid, cleared history, resumes playing.
-    // (The rng stream continues, so each restart produces a new layout.)
+    // Replay the token's fixed opening: cleared history, resumes playing.
+    // (The initial soup is a trait — restart always reproduces the same gen 0.)
     function restart() {
       if (gridN !== N) rebuildRenderer(N); // restart returns to the token's full grid
       history = new History(traits.historyDepth);
-      grid = randomizeGrid(createGrid(gridN, gridN), 0.35, rng);
+      grid = cloneGrid(initialSoup);
       history.push(grid);
       renderer.rebuildCache([history.peek()!]);
       scrubLayers = null;
