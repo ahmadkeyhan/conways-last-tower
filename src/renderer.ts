@@ -467,6 +467,20 @@ export class Renderer {
     this._editTarget   = 0;
   }
 
+  // Static preview/capture frame: hide the ground, freeze the camera at the
+  // classic isometric corner (no orbit, no edit/paused offsets), render once.
+  renderCapture(): void {
+    this.ground.visible = false;
+    this._angleTarget = null;
+    this._camAngle    = Math.PI / 4; // classic isometric corner
+    this._editAmt = this._editTarget = 0;
+    this._pausedAmt = this._pausedTarget = 0;
+    this._applyProjection();
+    this._trackCamera();
+    this.gl.shadowMap.needsUpdate = true;
+    this.gl.render(this.scene, this.camera);
+  }
+
   // Edit mode camera: glide to a top-down view with the grid axis-aligned on
   // screen (angle snaps to k·90°, not the iso corner — squares, not diamonds).
   // Reuses the paused framing so the canvas clears the right-edge panel.

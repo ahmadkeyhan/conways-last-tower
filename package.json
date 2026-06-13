@@ -10,12 +10,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fxhash/project-sdk": "^0.0.17",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "three": "^0.184.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@fxhash/cli": "^0.0.24",
     "@types/node": "^24.12.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
