@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   createGrid, randomizeGrid, step, cloneGrid, History, RULESETS,
-  getCell, setCell, innerSnapshot,
+  getCell, setCell, innerSnapshot, countAlive,
 } from './engine';
 import type { Grid } from './engine';
 import { Renderer } from './renderer';
@@ -200,7 +200,7 @@ export default function App() {
       renderer.setGhost(null);
       playing = true;
       renderer.resumeOrbit();
-      updateInfo(`Gen ${history.totalGenerations}  |  ${traits.ruleset}  |  ${N}×${N}  |  tile ${tileW}px`);
+      updateInfo(`Gen ${history.totalGenerations}  |  ${traits.ruleset}  |  ${N}×${N}  |  population ${countAlive(grid)}`);
       syncUi();
     }
 
@@ -377,7 +377,7 @@ export default function App() {
         history.push(grid);
         renderer.commitLayer(history.peek()!);
         lastStep = t;
-        updateInfo(`Gen ${history.totalGenerations}  |  ${traits.ruleset}  |  ${N}×${N}  |  tile ${tileW}px`);
+        updateInfo(`Gen ${history.totalGenerations}  |  ${traits.ruleset}  |  ${N}×${N}  |  population ${countAlive(grid)}`);
       }
 
       renderer.render();
