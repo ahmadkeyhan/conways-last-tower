@@ -122,6 +122,12 @@ html, body, #root {
   font: 11px/1.4 ui-monospace, Consolas, monospace;
 }
 
+#stamp-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .stamp-section {
   display: flex;
   flex-direction: column;
@@ -189,5 +195,42 @@ html, body, #root {
   #controls {
     left: 24px;
     transform: none;
+  }
+}
+
+/* Portrait: a tall right-side stamp column would sit on top of the centered
+   tower. Dock the panel to the top of the screen and stack it as
+   gallery → rotate/flip → grid-size, leaving the canvas below and the info bar
+   pinned to the bottom. The gallery itself scrolls horizontally. */
+@media (orientation: portrait) {
+  #stamp-panel {
+    inset: 0 0 auto 0;          /* full-width top block */
+    bottom: auto;
+    transform: none;
+    max-width: none;
+    max-height: 50vh;
+    flex-direction: column;
+    gap: 8px;
+    padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 10px;
+    overflow: hidden;
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0));
+  }
+
+  #stamp-gallery {
+    flex-direction: row;        /* categories scroll sideways */
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    gap: 18px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 4px;
+  }
+
+  .stamp-section {
+    flex: 0 0 auto;             /* each category keeps its natural width */
+  }
+
+  #stamp-transform {
+    align-self: center;
   }
 }

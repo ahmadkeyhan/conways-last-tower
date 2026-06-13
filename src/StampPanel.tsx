@@ -56,32 +56,27 @@ export default function StampPanel({
 }: StampPanelProps) {
   return (
     <div id="stamp-panel">
-      <GridSizeControl
-        gridSize={gridSize}
-        minGrid={minGrid}
-        maxGrid={maxGrid}
-        onGridSize={onGridSize}
-      />
-
-      {SECTIONS.map(({ label, category }) => {
-        const stamps = ALL_STAMPS.filter((s: Stamp) => s.category === category);
-        if (stamps.length === 0) return null;
-        return (
-          <div key={category} className="stamp-section">
-            <div className="stamp-section-title">{label}</div>
-            {stamps.map(s => (
-              <button
-                key={s.id}
-                type="button"
-                className={s.id === selectedId ? 'selected' : ''}
-                onClick={() => onSelect(s.id)}
-              >
-                {s.name}
-              </button>
-            ))}
-          </div>
-        );
-      })}
+      <div id="stamp-gallery">
+        {SECTIONS.map(({ label, category }) => {
+          const stamps = ALL_STAMPS.filter((s: Stamp) => s.category === category);
+          if (stamps.length === 0) return null;
+          return (
+            <div key={category} className="stamp-section">
+              <div className="stamp-section-title">{label}</div>
+              {stamps.map(s => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className={s.id === selectedId ? 'selected' : ''}
+                  onClick={() => onSelect(s.id)}
+                >
+                  {s.name}
+                </button>
+              ))}
+            </div>
+          );
+        })}
+      </div>
 
       <div id="stamp-transform">
         <button
@@ -101,6 +96,13 @@ export default function StampPanel({
           ⇋
         </button>
       </div>
+
+      <GridSizeControl
+        gridSize={gridSize}
+        minGrid={minGrid}
+        maxGrid={maxGrid}
+        onGridSize={onGridSize}
+      />
     </div>
   );
 }
