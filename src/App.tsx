@@ -13,6 +13,12 @@ import type { Stamp, StampPattern } from './stamps';
 import { initFx } from './fxhash';
 import type { FxContext } from './fxhash';
 
+// Smallest grid the user can shrink the canvas to in edit mode. On a torus an
+// 8×8 world still has room for blinkers, toads, beacons and a glider that
+// travels several cells before wrapping onto itself — below this, patterns fold
+// back instantly and Life stops being interesting.
+const MIN_GRID = 8;
+
 // Imperative sim API — created inside the effect, called from UI handlers.
 type SimAPI = {
   playPause: () => void;
@@ -22,6 +28,7 @@ type SimAPI = {
   restart: () => void;
   enterEdit: () => void;
   clearCanvas: () => void;
+  setGridSize: (n: number) => void;
   selectStamp: (id: string) => void;
   rotateStamp: () => void;
   flipStamp: () => void;
@@ -34,6 +41,9 @@ type UiState = {
   scrubIndex: number;
   scrubMax: number;
   genLabel: string;
+  gridSize: number;
+  minGrid: number;
+  maxGrid: number;
 };
 
 export default function App() {
@@ -48,6 +58,9 @@ export default function App() {
   const [ui, setUi] = useState<UiState>({
     playing: true, editing: false, selectedStamp: null,
     scrubIndex: 0, scrubMax: 0, genLabel: '',
+    gridSize: fxRef.current.traits.gridSize,
+    minGrid: Math.min(MIN_GRID, fxRef.current.traits.gridSize),
+    maxGrid: fxRef.current.traits.gridSize,
   });
 
   useEffect(() => {
@@ -55,20 +68,25 @@ export default function App() {
 
     const { rng, traits, skin } = fxRef.current!;
     const ruleset = RULESETS[traits.ruleset];
-    const N = traits.gridSize;
+    const N = traits.gridSize;          // token's max grid size (trait)
+    const minGrid = Math.min(MIN_GRID, N);
+    let   gridN = N;                    // current active grid size (editable)
 
     let history = new History(traits.historyDepth);
-    let grid = randomizeGrid(createGrid(N, N), 0.35, rng);
+    let grid = randomizeGrid(createGrid(gridN, gridN), 0.35, rng);
     history.push(grid);
 
-    const tileW = Math.min(32, Math.max(4, Math.floor((window.innerWidth * 0.7) / N)));
+    const tileFor = (n: number) =>
+      Math.min(32, Math.max(4, Math.floor((window.innerWidth * 0.7) / n)));
 
-    const renderer = new Renderer({
+    // `let` so a grid-size change can dispose and swap in a fresh renderer —
+    // every closure below references `renderer` by name, so they all follow it.
+    let renderer = new Renderer({
       canvas,
       skin,
-      tileWidth: tileW,
-      rows: N,
-      cols: N,
+      tileWidth: tileFor(gridN),
+      rows: gridN,
+      cols: gridN,
       historyDepth: traits.historyDepth,
     });
 
@@ -118,11 +136,14 @@ export default function App() {
         scrubIndex,
         scrubMax: paused ? scrubLayers!.length - 1 : 0,
         genLabel: paused ? `gen ${genAt(scrubIndex)}` : '',
+        gridSize: gridN,
+        minGrid,
+        maxGrid: N,
       });
       if (paused) {
-        updateInfo(`paused @ gen ${genAt(scrubIndex)}  |  ${traits.ruleset}  |  ${N}×${N}`);
+        updateInfo(`paused @ gen ${genAt(scrubIndex)}  |  ${traits.ruleset}  |  ${gridN}×${gridN}`);
       } else if (editing) {
-        updateInfo(`edit  |  draw or stamp  |  ${N}×${N}`);
+        updateInfo(`edit  |  draw or stamp  |  ${gridN}×${gridN}`);
       }
     }
 
@@ -189,8 +210,9 @@ export default function App() {
     // Fresh randomized grid, cleared history, resumes playing.
     // (The rng stream continues, so each restart produces a new layout.)
     function restart() {
+      if (gridN !== N) rebuildRenderer(N); // restart returns to the token's full grid
       history = new History(traits.historyDepth);
-      grid = randomizeGrid(createGrid(N, N), 0.35, rng);
+      grid = randomizeGrid(createGrid(gridN, gridN), 0.35, rng);
       history.push(grid);
       renderer.rebuildCache([history.peek()!]);
       scrubLayers = null;
@@ -200,7 +222,7 @@ export default function App() {
       renderer.setGhost(null);
       playing = true;
       renderer.resumeOrbit();
-      updateInfo(`Gen ${history.totalGenerations}  |  ${traits.ruleset}  |  ${N}×${N}  |  population ${countAlive(grid)}`);
+      updateInfo(`Gen ${history.totalGenerations}  |  ${traits.ruleset}  |  ${gridN}×${gridN}  |  population ${countAlive(grid)}`);
       syncUi();
     }
 
@@ -217,6 +239,54 @@ export default function App() {
       editing = true;
       renderer.setEditView(true);                    // glide to top-down, axis-aligned
       renderer.rebuildCache([innerSnapshot(grid)]);  // collapse tower to the canvas layer
+      syncUi();
+    }
+
+    // Dispose the current renderer and build a fresh one at size n on the same
+    // canvas (the WebGL context is reused). frustum/fog/buffers all scale to n.
+    function rebuildRenderer(n: number) {
+      gridN = n;
+      renderer.dispose();
+      renderer = new Renderer({
+        canvas,
+        skin,
+        tileWidth: tileFor(n),
+        rows: n,
+        cols: n,
+        historyDepth: traits.historyDepth,
+      });
+      renderer.resize(window.innerWidth, window.innerHeight);
+    }
+
+    // Edit-mode only: resize the drawing canvas. The existing drawing is kept
+    // centered — center-cropped when shrinking, center-padded when growing.
+    function setGridSize(n: number) {
+      if (!editing) return;
+      n = Math.max(minGrid, Math.min(N, Math.round(n)));
+      if (n === gridN) return;
+
+      // Re-anchor the old cells to the new grid's center before swapping.
+      const prev = grid;
+      const prevN = gridN;
+      const next = createGrid(n, n);
+      const off = Math.floor((n - prevN) / 2); // +pad when growing, −crop when shrinking
+      for (let r = 0; r < prevN; r++) {
+        const nr = r + off;
+        if (nr < 0 || nr >= n) continue;
+        for (let c = 0; c < prevN; c++) {
+          const nc = c + off;
+          if (nc < 0 || nc >= n) continue;
+          if (getCell(prev, r, c) === 1) setCell(next, nr, nc, 1);
+        }
+      }
+
+      rebuildRenderer(n);
+      grid = next;
+      history = new History(traits.historyDepth);
+      hoverCell = null;
+      renderer.setGhost(null);
+      renderer.setEditView(true, true);              // snap (no glide) to top-down
+      renderer.rebuildCache([innerSnapshot(grid)]);
       syncUi();
     }
 
@@ -259,7 +329,7 @@ export default function App() {
           if (pat[r][c] !== 1) continue;
           const row = r0 + r;
           const col = c0 + c;
-          if (row >= 0 && row < N && col >= 0 && col < N) cells.push({ row, col });
+          if (row >= 0 && row < gridN && col >= 0 && col < gridN) cells.push({ row, col });
         }
       }
       return cells;
@@ -334,7 +404,7 @@ export default function App() {
 
     simRef.current = {
       playPause, stepBack, stepFwd, scrubTo, restart,
-      enterEdit, clearCanvas, selectStamp, rotateStamp, flipStamp,
+      enterEdit, clearCanvas, setGridSize, selectStamp, rotateStamp, flipStamp,
     };
 
     function onKey(e: KeyboardEvent) {
@@ -426,6 +496,10 @@ export default function App() {
         {ui.editing && (
           <StampPanel
             selectedId={ui.selectedStamp}
+            gridSize={ui.gridSize}
+            minGrid={ui.minGrid}
+            maxGrid={ui.maxGrid}
+            onGridSize={n => simRef.current?.setGridSize(n)}
             onSelect={id => simRef.current?.selectStamp(id)}
             onRotate={() => simRef.current?.rotateStamp()}
             onFlip={() => simRef.current?.flipStamp()}

@@ -128,6 +128,13 @@ html, body, #root {
   align-items: stretch;
 }
 
+#grid-size input[type='range'] {
+  width: 100%;
+  margin: 2px 0 4px;
+  cursor: pointer;
+  accent-color: var(--accent, #ffffff);
+}
+
 .stamp-section-title {
   color: rgba(255, 255, 255, 0.3);
   letter-spacing: 0.08em;

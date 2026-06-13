@@ -460,15 +460,39 @@ export class Renderer {
   // Edit mode camera: glide to a top-down view with the grid axis-aligned on
   // screen (angle snaps to k·90°, not the iso corner — squares, not diamonds).
   // Reuses the paused framing so the canvas clears the right-edge panel.
-  setEditView(active: boolean): void {
+  // `instant` snaps the view (no glide) — used when a fresh renderer is built
+  // after a grid-size change while already in edit mode.
+  setEditView(active: boolean, instant = false): void {
     if (active) {
       this._editTarget   = 1;
       this._pausedTarget = 1;
       this._angleTarget  =
         Math.round(this._camAngle / (Math.PI / 2)) * (Math.PI / 2);
+      if (instant) {
+        this._editAmt   = 1;
+        this._pausedAmt = 1;
+        this._camAngle  = this._angleTarget;
+        this.editGrid.visible = true;
+        (this.editGrid.material as THREE.LineBasicMaterial).opacity = 0.22;
+        this._applyProjection();
+        this._trackCamera();
+      }
     } else {
       this._editTarget = 0;
     }
+  }
+
+  // Release all GPU resources so a new Renderer can be built on the same canvas
+  // (grid-size change). The WebGL context itself is reused by the next renderer.
+  dispose(): void {
+    this.scene.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (mesh.geometry) mesh.geometry.dispose();
+      const mat = (mesh as { material?: THREE.Material | THREE.Material[] }).material;
+      if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+      else if (mat) mat.dispose();
+    });
+    this.gl.dispose();
   }
 
   // Single-layer preview (stamp preview / scrubber hover).
