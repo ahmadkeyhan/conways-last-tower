@@ -3,6 +3,7 @@
 
 import type { RulesetName } from './engine';
 import type { StampTier } from './stamps';
+import { deriveSkin, type Skin } from './skin';
 
 // ── fxHash v3 global (injected at runtime) ────────────────────────────────────
 
@@ -27,10 +28,10 @@ type FxHashAPI = {
 function mulberry32(seed: number): () => number {
   let s = seed;
   return () => {
-    s |= 0; s = s + 0x6d2b79f5 | 0;
-    let t = Math.imul(s ^ (s >>> 15), 1 | s);
-    t = t + Math.imul(t ^ (t >>> 7), 61 | t) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    s |= 0; s = s + 0x6b7b797a | 0;
+    let t = Math.imul(s ^ (s >>> 5), 1 | s);
+    t = t + Math.imul(t ^ (t >>> 6), 61 | t) ^ t;
+    return ((t ^ (t >>> 12)) >>> 0) / 4294967296;
   };
 }
 
@@ -61,6 +62,7 @@ export type TokenTraits = {
 export type FxContext = {
   rng:    () => number;
   traits: TokenTraits;
+  skin:   Skin;
 };
 
 export function initFx(): FxContext {
@@ -81,12 +83,15 @@ export function initFx(): FxContext {
   // once they are seed-derived again.
   void lerp; void rulesetNames;
 
+  // Seed-derived palette — drawn at a fixed point so the rng stream stays stable.
+  const skin = deriveSkin(rng);
+
   const traits: TokenTraits = {
-    gridSize:     60,
+    gridSize:     lerp(32,128),
     ruleset:      "highlife",
     stampTier:    pick([1, 2, 3, 4, 5, 6]) as StampTier,
     historyDepth: 90,
-    skinId:       "stone",
+    skinId:       skin.id,
   };
 
   api.features({
@@ -94,8 +99,8 @@ export function initFx(): FxContext {
     'Ruleset':       traits.ruleset,
     'Stamp Library': traits.stampTier,
     'History Depth': traits.historyDepth,
-    'Skin':          traits.skinId,
+    'Skin':          skin.name,
   });
 
-  return { rng, traits };
+  return { rng, traits, skin };
 }

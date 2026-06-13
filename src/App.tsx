@@ -10,8 +10,8 @@ import Controls from './Controls';
 import StampPanel from './StampPanel';
 import { getStampById, rotatePattern, flipPattern } from './stamps';
 import type { Stamp, StampPattern } from './stamps';
-import { FALLBACK_SKIN } from './skin';
 import { initFx } from './fxhash';
+import type { FxContext } from './fxhash';
 
 // Imperative sim API — created inside the effect, called from UI handlers.
 type SimAPI = {
@@ -40,6 +40,11 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const infoRef   = useRef<HTMLDivElement>(null);
   const simRef    = useRef<SimAPI | null>(null);
+  // Once-only fxhash init — the lazy guard survives StrictMode's double render
+  // and avoids registering features twice. Shared by the effect and the JSX
+  // below (the --accent CSS var), so both see the same seed-derived skin.
+  const fxRef     = useRef<FxContext | null>(null);
+  if (!fxRef.current) fxRef.current = initFx();
   const [ui, setUi] = useState<UiState>({
     playing: true, editing: false, selectedStamp: null,
     scrubIndex: 0, scrubMax: 0, genLabel: '',
@@ -48,7 +53,7 @@ export default function App() {
   useEffect(() => {
     const canvas = canvasRef.current!;
 
-    const { rng, traits } = initFx();
+    const { rng, traits, skin } = fxRef.current!;
     const ruleset = RULESETS[traits.ruleset];
     const N = traits.gridSize;
 
@@ -60,7 +65,7 @@ export default function App() {
 
     const renderer = new Renderer({
       canvas,
-      skin: FALLBACK_SKIN,
+      skin,
       tileWidth: tileW,
       rows: N,
       cols: N,
@@ -399,7 +404,7 @@ export default function App() {
     <div
       id="app"
       className={ui.editing ? 'editing' : ''}
-      style={{ '--accent': FALLBACK_SKIN.accentColor } as CSSProperties}
+      style={{ '--accent': fxRef.current!.skin.accentColor } as CSSProperties}
     >
       <canvas ref={canvasRef} id="game-canvas" />
       <div id="ui-overlay">

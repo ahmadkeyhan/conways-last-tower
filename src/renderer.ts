@@ -182,11 +182,11 @@ export class Renderer {
 
     // ── Lighting ──────────────────────────────────────────────────────────
     // Hemisphere ambient: cool sky / dark ground for soft color variation.
-    this.scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x16161c, 0.55));
+    this.scene.add(new THREE.HemisphereLight(0xbfbfbf, 0x161616, 0.55));
 
     // Warm key light from the upper right — casts the soft cube shadows.
     // Position and target follow the tower top (see _trackCamera).
-    const sun = new THREE.DirectionalLight(0xfff1dd, 1.7);
+    const sun = new THREE.DirectionalLight(0xffffff, 1.7);
     sun.position.set(fh * 0.55, fh * 1.1, fh * 0.3);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
