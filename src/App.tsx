@@ -399,7 +399,7 @@ export default function App() {
     <div
       id="app"
       className={ui.editing ? 'editing' : ''}
-      style={{ '--accent': FALLBACK_SKIN.accent } as CSSProperties}
+      style={{ '--accent': FALLBACK_SKIN.accentColor } as CSSProperties}
     >
       <canvas ref={canvasRef} id="game-canvas" />
       <div id="ui-overlay">

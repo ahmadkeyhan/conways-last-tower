@@ -13,6 +13,24 @@ export type RendererConfig = {
   historyDepth: number;
 };
 
+// ── Per-cube noise coloring ───────────────────────────────────────────────────
+//
+// Every cube is one solid color, but a NOISE_RATIO fraction of them use the
+// skin's noise color instead of the main color — the tower reads as speckled
+// blocks rather than a solid mass.
+//
+// The choice is a deterministic position hash, not an rng: a cell's color
+// must be stable across rebuilds (paint strokes rebuild the live layer, the
+// scrubber rebuilds whole towers — an rng would reshuffle colors and shimmer).
+
+const NOISE_RATIO = 0.35; // fraction of cubes tinted with the noise color
+
+function cellNoise(row: number, col: number, layer: number, salt: number): boolean {
+  let h = (row * 73856093) ^ (col * 19349663) ^ (layer * 83492791) ^ salt;
+  h = Math.imul(h ^ (h >>> 13), 0x5bd1e995);
+  return ((h ^ (h >>> 15)) >>> 0) / 0xffffffff < NOISE_RATIO;
+}
+
 // Kept for interaction.ts pixel → grid-cell hit-testing.
 export function toIso(
   col: number, row: number, z: number, tw: number,
@@ -61,6 +79,7 @@ export class Renderer {
   private liveMesh: THREE.InstancedMesh;
   private capMesh: THREE.InstancedMesh;
   private ghostMesh: THREE.InstancedMesh;
+  private ground: THREE.Mesh;
   private editGrid: THREE.GridHelper;
   private sun: THREE.DirectionalLight;
   private maxHistoryInstances: number;
@@ -73,6 +92,12 @@ export class Renderer {
   // Effective vertical frustum after aspect correction — equals frustumH in
   // landscape, grows in portrait so the tower width never gets clipped.
   private viewH: number;
+
+  // Pre-parsed skin colors for per-cube noise coloring
+  private readonly _towerMain:   THREE.Color;
+  private readonly _towerNoise:  THREE.Color;
+  private readonly _accentMain:  THREE.Color;
+  private readonly _accentNoise: THREE.Color;
 
   // Reusable scratch objects — avoid per-frame allocations
   private readonly _mat  = new THREE.Matrix4();
@@ -112,6 +137,11 @@ export class Renderer {
     this.rows          = rows;
     this.cols          = cols;
     this.visibleLayers = rows;
+
+    this._towerMain   = new THREE.Color(skin.towerColor);
+    this._towerNoise  = new THREE.Color(skin.towerNoiseColor);
+    this._accentMain  = new THREE.Color(skin.accentColor);
+    this._accentNoise = new THREE.Color(skin.accentNoiseColor);
 
     // World units visible vertically — grid footprint fills ~60 % of height
     this.frustumH = (rows + cols) * 0.7;
@@ -182,40 +212,33 @@ export class Renderer {
       Math.floor((192 * 1024 * 1024) / 64),
     );
 
+    // Tower body — white base color so per-instance colors show true
     const bodyMat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(skin.historyPalette.topFace),
+      color: 0xffffff,
       roughness: 0.82,
       metalness: 0.08,
     });
     // Distance fog reads view depth, which in an iso view varies diagonally
     // across the footprint instead of down the tower. Rewrite the fog input
     // to "distance below the tower top" so layers fade uniformly to the base.
-    bodyMat.onBeforeCompile = (shader) => {
-      shader.uniforms.uTowerTopY = this._towerTopY;
-      shader.vertexShader = shader.vertexShader
-        .replace(
-          '#include <common>',
-          '#include <common>\nuniform float uTowerTopY;',
-        )
-        .replace(
-          '#include <fog_vertex>',
-          `#ifdef USE_FOG
-            vec4 twp = modelMatrix * instanceMatrix * vec4( transformed, 1.0 );
-            vFogDepth = uTowerTopY - twp.y;
-          #endif`,
-        );
-    };
+    this._patchHeightFog(bodyMat, true);
 
     this.historyMesh = new THREE.InstancedMesh(box, bodyMat, this.maxHistoryInstances);
     this.historyMesh.count = 0;
     this.historyMesh.castShadow    = true;
     this.historyMesh.receiveShadow = true;
+    // Allocate instance colors up front so the shader compiles with
+    // instance-color support from the first frame.
+    this.historyMesh.instanceColor =
+      new THREE.InstancedBufferAttribute(new Float32Array(this.maxHistoryInstances * 3), 3);
 
-    // Live layer body — identical dark cubes; flushed into historyMesh on commit
+    // Live layer body — identical cubes; flushed into historyMesh on commit
     this.liveMesh = new THREE.InstancedMesh(box, bodyMat, rows * cols);
     this.liveMesh.count = 0;
     this.liveMesh.castShadow    = true;
     this.liveMesh.receiveShadow = true;
+    this.liveMesh.instanceColor =
+      new THREE.InstancedBufferAttribute(new Float32Array(rows * cols * 3), 3);
 
     // Accent cap — flat plane resting on each live cube's top face.
     // MeshBasicMaterial: flat unlit accent, matching the old 2D cap diamond.
@@ -225,17 +248,21 @@ export class Renderer {
       capPlane,
       // fog: false — caps sit at the tower top and must stay full-bright;
       // the basic material isn't fog-patched, so default fog would wash it out.
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(skin.accent), fog: false }),
+      // White base color — per-instance colors carry the accent/noise mix.
+      new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false }),
       rows * cols,
     );
     this.capMesh.count = 0;
+    this.capMesh.instanceColor =
+      new THREE.InstancedBufferAttribute(new Float32Array(rows * cols * 3), 3);
 
     // Stamp ghost — translucent accent planes previewing a stamp placement
     // (edit mode). Floats just above the caps; rebuilt on pointer move.
     this.ghostMesh = new THREE.InstancedMesh(
       capPlane,
+      // Flat translucent accent — it's a placement preview, no texture
       new THREE.MeshBasicMaterial({
-        color: new THREE.Color(skin.accent),
+        color: new THREE.Color(skin.accentColor),
         transparent: true,
         opacity: 0.4,
         depthWrite: false,
@@ -248,7 +275,9 @@ export class Renderer {
     // Edit-mode grid — cell boundaries on the canvas plane. Fades in with the
     // top-down glide (opacity tracks _editAmt in render); rides the live
     // layer's top face via _trackCamera.
-    this.editGrid = new THREE.GridHelper(rows, rows, 0xffffff, 0xffffff);
+    this.editGrid = new THREE.GridHelper(
+      rows, rows, new THREE.Color(skin.gridColor), new THREE.Color(skin.gridColor),
+    );
     {
       const mat = this.editGrid.material as THREE.LineBasicMaterial;
       mat.transparent = true;
@@ -257,6 +286,24 @@ export class Renderer {
       mat.fog         = false;
     }
     this.editGrid.visible = false;
+
+    // ── Ground plane ──────────────────────────────────────────────────────
+    // A flat slab at y = 0, twice the grid footprint, so the tower reads as
+    // rising out of solid ground. Shares the height-fog patch (non-instanced
+    // variant): as the tower grows, the ground sinks below the fog band and
+    // dissolves into the cloud-colored haze — the tower climbs past the clouds.
+    const groundGeo = new THREE.BoxGeometry(cols * 1.37, rows * 1.37,cols*2);
+    groundGeo.rotateX(-Math.PI / 2); // lie flat, facing +Y
+    const groundMat = new THREE.MeshStandardMaterial({
+      color: this._towerNoise,
+      roughness: 0.95,
+      metalness: 0.0,
+    });
+    this._patchHeightFog(groundMat, false);
+    this.ground = new THREE.Mesh(groundGeo, groundMat);
+    this.ground.position.y = -1 * cols;
+    this.ground.receiveShadow = true;
+    this.ground.frustumCulled = false;
 
     // Bounding spheres are computed once from initial instance positions and
     // go stale as the tower grows — the camera rises past them and Three.js
@@ -268,8 +315,34 @@ export class Renderer {
     this.editGrid.frustumCulled    = false;
 
     this.scene.add(
+      this.ground,
       this.historyMesh, this.liveMesh, this.capMesh, this.ghostMesh, this.editGrid,
     );
+  }
+
+  // Rewrite a material's fog input to "distance below the tower top" so the
+  // scene fades uniformly down the tower (not diagonally by view depth).
+  // instanced=true multiplies by instanceMatrix (InstancedMesh); false uses
+  // the plain model matrix (the ground plane).
+  private _patchHeightFog(material: THREE.Material, instanced: boolean): void {
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uTowerTopY = this._towerTopY;
+      const worldPos = instanced
+        ? 'modelMatrix * instanceMatrix * vec4( transformed, 1.0 )'
+        : 'modelMatrix * vec4( transformed, 1.0 )';
+      shader.vertexShader = shader.vertexShader
+        .replace(
+          '#include <common>',
+          '#include <common>\nuniform float uTowerTopY;',
+        )
+        .replace(
+          '#include <fog_vertex>',
+          `#ifdef USE_FOG
+            vec4 twp = ${worldPos};
+            vFogDepth = uTowerTopY - twp.y;
+          #endif`,
+        );
+    };
   }
 
   // ── commitLayer ─────────────────────────────────────────────────────────────
@@ -285,6 +358,8 @@ export class Renderer {
       const removed = this.layerInstanceCounts.shift()!;
       const arr = this.historyMesh.instanceMatrix.array as Float32Array;
       arr.copyWithin(0, removed * 16);
+      const carr = this.historyMesh.instanceColor!.array as Float32Array;
+      carr.copyWithin(0, removed * 3);
       this.historyInstanceCount -= removed;
     }
 
@@ -295,6 +370,10 @@ export class Renderer {
     histAttr.clearUpdateRanges();
     histAttr.addUpdateRange(0, this.historyInstanceCount * 16);
     histAttr.needsUpdate = true;
+    const histColor = this.historyMesh.instanceColor!;
+    histColor.clearUpdateRanges();
+    histColor.addUpdateRange(0, this.historyInstanceCount * 3);
+    histColor.needsUpdate = true;
 
     // Build the new cap for the incoming grid
     this._buildCap(grid);
@@ -443,6 +522,11 @@ export class Renderer {
     const dst = this.historyMesh.instanceMatrix.array as Float32Array;
     dst.set(src.subarray(0, n * 16), this.historyInstanceCount * 16);
 
+    // Carry the per-cube colors along with the matrices
+    const csrc = this.liveMesh.instanceColor!.array as Float32Array;
+    const cdst = this.historyMesh.instanceColor!.array as Float32Array;
+    cdst.set(csrc.subarray(0, n * 3), this.historyInstanceCount * 3);
+
     this.layerInstanceCounts.push(n);
     this.historyInstanceCount += n;
   }
@@ -465,13 +549,21 @@ export class Renderer {
         this.liveMesh.setMatrixAt(count, this._mat);
         this._mat.makeTranslation(x, capY, z);
         this.capMesh.setMatrixAt(count, this._mat);
+        // Per-cube noise color — independent hash draws (different salts)
+        // so the cap speckle doesn't mirror the body speckle.
+        this.liveMesh.setColorAt(count, cellNoise(r, c, layerIndex, 0x9e3779b9)
+          ? this._towerNoise : this._towerMain);
+        this.capMesh.setColorAt(count, cellNoise(r, c, layerIndex, 0x517cc1b7)
+          ? this._accentNoise : this._accentMain);
         count++;
       }
     }
     this.liveMesh.count = count;
     this.liveMesh.instanceMatrix.needsUpdate = true;
+    this.liveMesh.instanceColor!.needsUpdate = true;
     this.capMesh.count = count;
     this.capMesh.instanceMatrix.needsUpdate = true;
+    this.capMesh.instanceColor!.needsUpdate = true;
   }
 
   // Keep the top layer at ~35 % from the top of the viewport by moving the
