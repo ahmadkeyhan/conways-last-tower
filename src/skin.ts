@@ -73,9 +73,12 @@ export function deriveSkin(rng: () => number): Skin {
   const bgL   = clamp01(towerL - (0.20 + rng() * 0.08)); // same hue, darker
   const bgSat = clamp01(towerSat * 1.1);
 
-  const accentHue = (baseHue + 180) % 360; // complementary
-  const accentSat = 0.70 + rng() * 0.20;
-  const accentL   = 0.65 + rng() * 0.12;
+  // Accent is one of two distinct looks (no muddy middle): either almost white
+  // or the saturated complementary color.
+  const accentHue   = (baseHue + 180) % 360; // complementary
+  const whiteAccent = rng() < 0.5;
+  const accentSat   = whiteAccent ? 0.05 + rng() * 0.05 : 0.70 + rng() * 0.2;
+  const accentL     = whiteAccent ? 0.92 + rng() * 0.05 : 0.65 + rng() * 0.12;
 
   return {
     id:   family.name.toLowerCase(),
@@ -85,7 +88,7 @@ export function deriveSkin(rng: () => number): Skin {
     towerNoiseColor: hslToHex(baseHue, towerSat * 0.9, towerL - 0.10),
 
     accentColor:      hslToHex(accentHue, accentSat, accentL),
-    accentNoiseColor: hslToHex(accentHue, accentSat * 0.9, accentL - 0.12),
+    accentNoiseColor: hslToHex(accentHue, accentSat * 0.95, accentL - 0.1),
 
     backgroundColor: hslToHex(baseHue, bgSat, bgL),
     gridColor:       hslToHex(accentHue, 0.40, 0.85),
