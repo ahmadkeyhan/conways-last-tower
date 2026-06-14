@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { Grid } from './engine';
 import type { Skin } from './skin';
+import type { ShapeKind } from './rarity';
 
 // ── Public config ─────────────────────────────────────────────────────────────
 
@@ -12,6 +13,7 @@ export type RendererConfig = {
   rows: number;
   cols: number;
   historyDepth: number;
+  shape: ShapeKind;
 };
 
 // ── Per-cube noise coloring ───────────────────────────────────────────────────
@@ -133,7 +135,9 @@ export class Renderer {
   private readonly _hsl = { h: 0, s: 0, l: 0 };
   private readonly _bodyScratch = new THREE.Color();
   private readonly _capScratch  = new THREE.Color();
-  private readonly _white = new THREE.Color(0.1, 0.1, 0.1); // chrome caps: PBR does the work
+  private readonly _white = new THREE.Color(1, 0.84, 0); // chrome caps: PBR does the work
+  // Sphere caps enclose the body sphere (concentric) rather than sit on top.
+  private readonly _capAtCenter: boolean;
 
   // Picking scratch objects (pickCell) — reused across calls
   private readonly _raycaster = new THREE.Raycaster();
@@ -220,8 +224,16 @@ export class Renderer {
     this.scene.add(sun, sun.target);
 
     // ── Geometry & meshes ─────────────────────────────────────────────────
-    // Unit voxel — `rows` stacked layers form a rows × cols × rows cube
-    const box = new THREE.BoxGeometry(1, 1, 1);
+    // Unit voxel by Shape trait — kept low-poly for the millions-of-instances
+    // budget. `rows` stacked layers form a rows × cols × rows tower.
+    const shape = config.shape;
+    const box =
+      shape === 'cylinder' ? new THREE.CylinderGeometry(0.5, 0.5, 1, 12)
+      : shape === 'sphere'  ? new THREE.IcosahedronGeometry(0.5, 1)
+      : new THREE.BoxGeometry(1, 1, 1);
+    // Sphere: the cap is a slightly larger concentric accent shell (the newest
+    // layer's spheres glow accent), not a plate on top.
+    this._capAtCenter = shape === 'sphere';
 
     // Worst case: every cell alive on every visible layer (64 B per Matrix4)
     this.maxHistoryInstances = Math.min(
@@ -257,9 +269,19 @@ export class Renderer {
     this.liveMesh.instanceColor =
       new THREE.InstancedBufferAttribute(new Float32Array(rows * cols * 3), 3);
 
-    // Accent cap — flat plane resting on each live cube's top face.
-    const capPlane = new THREE.PlaneGeometry(1, 1);
-    capPlane.rotateX(-Math.PI / 2); // lie flat, facing +Y
+    // Accent cap — geometry follows the Shape trait:
+    //   cube     → square plane on the top face
+    //   cylinder → circle plane on the top face (matches the round top)
+    //   sphere   → concentric shell, slightly larger than the body sphere, so the
+    //              newest layer reads as accent-colored spheres
+    let capPlane: THREE.BufferGeometry;
+    if (shape === 'cylinder') {
+      capPlane = new THREE.CircleGeometry(0.5, 24).rotateX(-Math.PI / 2);
+    } else if (shape === 'sphere') {
+      capPlane = new THREE.IcosahedronGeometry(0.52, 1);
+    } else {
+      capPlane = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2); // lie flat, facing +Y
+    }
     // Chrome accent → reflective PBR caps (need an env map to reflect something);
     // every other accent → flat unlit caps carrying per-instance colors.
     // fog: false — caps sit at the tower top and must stay full-bright.
@@ -274,7 +296,12 @@ export class Renderer {
       });
     } else {
       // White base color — per-instance colors carry the accent/noise mix.
-      capMat = new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false });
+      capMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.82,
+      metalness: 0.08,
+      fog: false
+    });
     }
     this.capMesh = new THREE.InstancedMesh(capPlane, capMat, rows * cols);
     this.capMesh.count = 0;
@@ -282,9 +309,10 @@ export class Renderer {
       new THREE.InstancedBufferAttribute(new Float32Array(rows * cols * 3), 3);
 
     // Stamp ghost — translucent accent planes previewing a stamp placement
-    // (edit mode). Floats just above the caps; rebuilt on pointer move.
+    // (edit mode). Flat square regardless of Shape — it's a placement indicator.
+    const ghostPlane = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
     this.ghostMesh = new THREE.InstancedMesh(
-      capPlane,
+      ghostPlane,
       // Flat translucent accent — it's a placement preview, no texture
       new THREE.MeshBasicMaterial({
         color: new THREE.Color(skin.accentColor),
@@ -611,6 +639,8 @@ export class Renderer {
     const prismatic = this.skin.accentMode === 'prismatic';
     const metallic  = this.skin.accentMode === 'metallic';
     const denom     = rows + cols;
+    // Sphere caps are concentric shells (body center); cube/cylinder sit on top.
+    const capYpos   = this._capAtCenter ? layerY : capY;
     // Rainbow uses the token's tower lightness so it sits in the same tonal range.
     this._towerMain.getHSL(this._hsl);
     const towerL = this._hsl.l;
@@ -623,7 +653,7 @@ export class Renderer {
         const z = r - rows / 2 + 0.5;
         this._mat.makeTranslation(x, layerY, z);
         this.liveMesh.setMatrixAt(count, this._mat);
-        this._mat.makeTranslation(x, capY, z);
+        this._mat.makeTranslation(x, capYpos, z);
         this.capMesh.setMatrixAt(count, this._mat);
 
         // ── Body color ──────────────────────────────────────────────────────

@@ -13,7 +13,8 @@ import {
   DENSITY_TIER_WEIGHTS, DENSITY_TIER_POINTS,
   ACCENT_WEIGHTS, ACCENT_POINTS,
   PALETTE_WEIGHTS, PALETTE_POINTS, PALETTE_LABEL,
-  type AccentVariant, type PaletteMode, type RarityTier,
+  SHAPE_WEIGHTS, SHAPE_POINTS, SHAPE_LABEL,
+  type AccentVariant, type PaletteMode, type ShapeKind, type RarityTier,
 } from './rarity';
 
 // Minimal local typing for the snippet's $fx — only the members we use. Keeps
@@ -41,6 +42,7 @@ export type TokenTraits = {
   // Rarity axes
   accent:       AccentVariant;
   palette:      PaletteMode;
+  shape:        ShapeKind;
   rarity:       RarityTier;
 };
 
@@ -71,7 +73,7 @@ export function initFx(): FxContext {
   const lerp = (min: number, max: number): number => Math.floor(rng() * (max - min + 1)) + min;
 
   // ── Weighted draws (fixed order — deterministic per seed) ─────────────────
-  //   ruleset → palette → accent → skin → gridTier+value → density(tier+value)
+  //   ruleset → palette → accent → skin → gridTier+value → density → shape
   const ruleset       = weightedPick(rng, RULESET_WEIGHTS);
   const paletteMode   = weightedPick(rng, PALETTE_WEIGHTS);
   const accentVariant = weightedPick(rng, ACCENT_WEIGHTS);
@@ -89,6 +91,8 @@ export function initFx(): FxContext {
   const densityTier = weightedPick(rng, DENSITY_TIER_WEIGHTS);
   const seedDensity = sampleDensity(rng, ruleset, densityTier);
 
+  const shape = weightedPick(rng, SHAPE_WEIGHTS);
+
   // Internal-only traits (not features); drawn last so they don't perturb the
   // rarity-relevant stream above.
   const stampTier    = pick([1, 2, 3, 4, 5, 6]) as StampTier;
@@ -100,12 +104,13 @@ export function initFx(): FxContext {
     GRID_TIER_POINTS[gridTier] +
     DENSITY_TIER_POINTS[densityTier] +
     ACCENT_POINTS[accentVariant] +
-    PALETTE_POINTS[paletteMode];
+    PALETTE_POINTS[paletteMode] +
+    SHAPE_POINTS[shape];
   const rarity = rarityTier(points);
 
   const traits: TokenTraits = {
     gridSize, ruleset, stampTier, historyDepth, seedDensity,
-    skinId: skin.id, accent: accentVariant, palette: paletteMode, rarity,
+    skinId: skin.id, accent: accentVariant, palette: paletteMode, shape, rarity,
   };
 
   // Public features (7). Grid Size / Seed Density show the drawn tier. The Skin
@@ -123,6 +128,7 @@ export function initFx(): FxContext {
     'Seed Density': densityTier,
     'Accent':       accentVariant,
     'Palette':      PALETTE_LABEL[paletteMode],
+    'Shape':        SHAPE_LABEL[shape],
     'Rarity':       rarity,
   });
 

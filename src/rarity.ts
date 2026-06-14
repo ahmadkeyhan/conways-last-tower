@@ -7,8 +7,10 @@ import type { RulesetName } from './engine';
 
 export type GridTier      = 'Small' | 'Medium' | 'Large';
 export type DensityTier   = 'Sparse' | 'Balanced' | 'Dense';
-export type AccentVariant = 'White' | 'Complementary' | 'Chrome' | 'Prismatic';
+// 'Chrome' stays in the union (code intact) but is not in ACCENT_WEIGHTS — never minted.
+export type AccentVariant = 'White' | 'Dark' | 'Complementary' | 'Chrome' | 'Prismatic';
 export type PaletteMode    = 'standard' | 'monochrome' | 'noisy' | 'rainbow';
+export type ShapeKind     = 'cube' | 'cylinder' | 'sphere';
 export type RarityTier    = 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary';
 
 // ── Weighted pick ──────────────────────────────────────────────────────────────
@@ -72,11 +74,12 @@ export function sampleDensity(
 }
 
 // ── Accent variant ─────────────────────────────────────────────────────────────
+// Chrome is intentionally absent (dropped from the draw); its code/points stay.
 export const ACCENT_WEIGHTS: readonly [AccentVariant, number][] = [
-  ['White', 46], ['Complementary', 30], ['Chrome', 15], ['Prismatic', 9],
+  ['White', 45], ['Dark', 25], ['Complementary', 22], ['Prismatic', 8],
 ];
 export const ACCENT_POINTS: Record<AccentVariant, number> = {
-  White: 0, Complementary: 1, Chrome: 2, Prismatic: 4,
+  White: 0, Dark: 1, Complementary: 1, Chrome: 2, Prismatic: 4,
 };
 
 // ── Palette mode ───────────────────────────────────────────────────────────────
@@ -88,6 +91,15 @@ export const PALETTE_POINTS: Record<PaletteMode, number> = {
 };
 export const PALETTE_LABEL: Record<PaletteMode, string> = {
   standard: 'Standard', monochrome: 'Monochrome', noisy: 'Noisy', rainbow: 'Rainbow',
+};
+
+// ── Shape (body voxel geometry) ────────────────────────────────────────────────
+export const SHAPE_WEIGHTS: readonly [ShapeKind, number][] = [
+  ['cube', 60], ['cylinder', 30], ['sphere', 10],
+];
+export const SHAPE_POINTS: Record<ShapeKind, number> = { cube: 0, cylinder: 1, sphere: 2 };
+export const SHAPE_LABEL: Record<ShapeKind, string> = {
+  cube: 'Cube', cylinder: 'Cylinder', sphere: 'Sphere',
 };
 
 // ── Rarity tier ────────────────────────────────────────────────────────────────

@@ -91,6 +91,7 @@ export default function App() {
       rows: gridN,
       cols: gridN,
       historyDepth: traits.historyDepth,
+      shape: traits.shape,
     });
 
     function resize() {
@@ -257,6 +258,7 @@ export default function App() {
         rows: n,
         cols: n,
         historyDepth: traits.historyDepth,
+        shape: traits.shape
       });
       renderer.resize(window.innerWidth, window.innerHeight);
     }
