@@ -100,7 +100,6 @@ export class Renderer {
   private readonly _towerMain:   THREE.Color;
   private readonly _towerNoise:  THREE.Color;
   private readonly _accentMain:  THREE.Color;
-  private readonly _accentNoise: THREE.Color;
   // Brian's Brain dying cells (state 2) — a dim, desaturated tone that's
   // distinct from both the tower body and the bright accent caps. The cap gets
   // the brighter base tone; the cube a darkened version (fading embers).
@@ -157,7 +156,6 @@ export class Renderer {
     this._towerMain   = new THREE.Color(skin.towerColor);
     this._towerNoise  = new THREE.Color(skin.towerNoiseColor);
     this._accentMain  = new THREE.Color(skin.accentColor);
-    this._accentNoise = new THREE.Color(skin.accentNoiseColor);
     // Dying cells (Brian's Brain) use the skin's triadic dying hue — unrelated
     // to tower or accent. Cap uses it as-is; the cube is darkened (fading embers).
     const dying = new THREE.Color(skin.dyingColor);
@@ -224,12 +222,14 @@ export class Renderer {
     this.scene.add(sun, sun.target);
 
     // ── Geometry & meshes ─────────────────────────────────────────────────
-    // Unit voxel by Shape trait — kept low-poly for the millions-of-instances
-    // budget. `rows` stacked layers form a rows × cols × rows tower.
+    // Unit voxel by Shape trait. The tower can hold millions of instances, so
+    // round shapes are kept to the lowest vertex count that still reads round:
+    // an 8-gon prism (~36 verts) and a detail-0 icosahedron (~60 verts) vs the
+    // box's 24 — keeps cylinders/spheres from throttling large grids.
     const shape = config.shape;
     const box =
-      shape === 'cylinder' ? new THREE.CylinderGeometry(0.5, 0.5, 1, 12)
-      : shape === 'sphere'  ? new THREE.IcosahedronGeometry(0.5, 1)
+      shape === 'cylinder' ? new THREE.CylinderGeometry(0.5, 0.5, 1, 8)
+      : shape === 'sphere'  ? new THREE.IcosahedronGeometry(0.5, 0)
       : new THREE.BoxGeometry(1, 1, 1);
     // Sphere: the cap is a slightly larger concentric accent shell (the newest
     // layer's spheres glow accent), not a plate on top.
@@ -276,9 +276,9 @@ export class Renderer {
     //              newest layer reads as accent-colored spheres
     let capPlane: THREE.BufferGeometry;
     if (shape === 'cylinder') {
-      capPlane = new THREE.CircleGeometry(0.5, 24).rotateX(-Math.PI / 2);
+      capPlane = new THREE.CircleGeometry(0.5, 16).rotateX(-Math.PI / 2);
     } else if (shape === 'sphere') {
-      capPlane = new THREE.IcosahedronGeometry(0.52, 1);
+      capPlane = new THREE.IcosahedronGeometry(0.52, 0);
     } else {
       capPlane = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2); // lie flat, facing +Y
     }
@@ -693,7 +693,7 @@ export class Renderer {
           this._capScratch.setHSL(((r + c) / denom) % 1, 0.7, 0.6);
           cap = this._capScratch;
         } else {
-          cap = cellNoise(r, c, layerIndex, 0x517cc1b7) ? this._accentNoise : this._accentMain;
+          cap = this._accentMain; // flat accent — no speckle on caps
         }
         this.capMesh.setColorAt(count, cap);
         count++;

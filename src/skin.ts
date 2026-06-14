@@ -114,8 +114,8 @@ export function deriveSkin(rng: () => number, opts: SkinOptions): Skin {
       accentHue = baseHue; accentSat = 0.05 + rng() * 0.05; accentL = 0.92 + rng() * 0.05;
       break;
     case 'Dark':
-      // Moody base-hue cap — sits just under the tower tone.
-      accentHue = baseHue; accentSat = 0.45 + rng() * 0.15; accentL = 0.24 + rng() * 0.08;
+      // Deep, desaturated base-hue cap — sinks below the tower tone.
+      accentHue = baseHue; accentSat = 0.18 + rng() * 0.10; accentL = 0.12 + rng() * 0.06;
       break;
     case 'Complementary':
       accentHue = (baseHue + 180) % 360; accentSat = 0.70 + rng() * 0.2; accentL = 0.65 + rng() * 0.12;

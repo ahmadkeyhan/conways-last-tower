@@ -74,9 +74,10 @@ export function sampleDensity(
 }
 
 // ── Accent variant ─────────────────────────────────────────────────────────────
-// Chrome is intentionally absent (dropped from the draw); its code/points stay.
+// Chrome and Dark are intentionally absent (dropped from the draw, not enough
+// cap contrast); their code/points stay so they can still be forced for testing.
 export const ACCENT_WEIGHTS: readonly [AccentVariant, number][] = [
-  ['White', 45], ['Dark', 25], ['Complementary', 22], ['Prismatic', 8],
+  ['White', 62], ['Complementary', 30], ['Prismatic', 8],
 ];
 export const ACCENT_POINTS: Record<AccentVariant, number> = {
   White: 0, Dark: 1, Complementary: 1, Chrome: 2, Prismatic: 4,
@@ -103,13 +104,13 @@ export const SHAPE_LABEL: Record<ShapeKind, string> = {
 };
 
 // ── Rarity tier ────────────────────────────────────────────────────────────────
-// Thresholds + weights calibrated by 200k simulation. Resulting frequencies ≈
-// Common 39% · Uncommon 34% · Rare 18% · Epic 6.5% · Legendary 1.6%
-// (Prismatic/NoisyMono weights were bumped to lift Legendary onto its ~1.5% target).
+// Thresholds calibrated by simulation (Shape axis in; Chrome + Dark out of the
+// accent draw). Resulting frequencies ≈ Common 58% · Uncommon 27% · Rare 11% ·
+// Epic 3.3% · Legendary 0.7% — each tier meaningfully rarer than the last.
 export function rarityTier(points: number): RarityTier {
-  if (points <= 3) return 'Common';
-  if (points <= 5) return 'Uncommon';
-  if (points <= 7) return 'Rare';
-  if (points <= 9) return 'Epic';
+  if (points <= 4)  return 'Common';
+  if (points <= 6)  return 'Uncommon';
+  if (points <= 8)  return 'Rare';
+  if (points <= 10) return 'Epic';
   return 'Legendary';
 }
