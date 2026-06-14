@@ -25,10 +25,10 @@ export type Skin = {
   gridColor:       string; // edit-mode grid lines (opacity applied in renderer)
 
   // ── Rarity variants ──────────────────────────────────────────────────────
-  paletteMode: PaletteMode;          // standard | monochrome | noisy | noisymono
+  paletteMode: PaletteMode;          // standard | monochrome | noisy | rainbow
   accentMode:  'solid' | 'prismatic'; // prismatic → renderer paints rainbow caps
-  // Per-cell HSL offsets for noisy / noisymono (undefined otherwise). Signed
-  // values in ~[-1, 1]; renderer scales into hue/lightness deltas.
+  // Per-cell HSL offsets for noisy (undefined otherwise). Signed values in
+  // ~[-1, 1]; renderer scales into hue/lightness deltas.
   noiseMap?:   Float32Array;
 };
 
