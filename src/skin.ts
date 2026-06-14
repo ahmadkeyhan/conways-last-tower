@@ -1,14 +1,19 @@
 // Aesthetic configuration — all visual parameters derived from the fxHash seed.
 
+import type { AccentVariant, PaletteMode } from './rarity';
+
+// noiseMap is sized to the largest possible grid so it can be generated at skin
+// derivation time (before the grid-size draw). The renderer indexes it with the
+// actual grid's stride: noiseMap[row * cols + col] (always < NOISE_DIM²).
+export const NOISE_DIM = 128;
+
 export type Skin = {
   id:   string;
   name: string;
-  // Tower cubes (history + live body): main color with a random splash of
-  // the noise color baked into a chunky pixel texture (see makeNoiseTexture
-  // in renderer.ts) — Minecraft-block look instead of flat monocolor.
+  // Tower cubes (history + live body): main color + a darker speckle companion.
   towerColor:      string;
   towerNoiseColor: string;
-  // Live-layer cap planes: same noise treatment with the accent pair.
+  // Live-layer cap planes — the accent.
   accentColor:      string;
   accentNoiseColor: string;
   // Dying cells (Brian's Brain) — a triadic hue unrelated to tower/accent.
@@ -18,6 +23,13 @@ export type Skin = {
   groundColor:      string;
   backgroundColor: string;
   gridColor:       string; // edit-mode grid lines (opacity applied in renderer)
+
+  // ── Rarity variants ──────────────────────────────────────────────────────
+  paletteMode: PaletteMode;          // standard | monochrome | noisy | noisymono
+  accentMode:  'solid' | 'prismatic'; // prismatic → renderer paints rainbow caps
+  // Per-cell HSL offsets for noisy / noisymono (undefined otherwise). Signed
+  // values in ~[-1, 1]; renderer scales into hue/lightness deltas.
+  noiseMap?:   Float32Array;
 };
 
 // ── HSL → hex (pure; keeps this module THREE-free) ────────────────────────────
@@ -66,16 +78,23 @@ const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 //     a noticeable-contrast cap.
 //   • Saturation spans a wide range across tokens for trait variety.
 // Draw order is fixed so the same seed always yields the same palette.
-export function deriveSkin(rng: () => number, swapTowerDying = false): Skin {
+export type SkinOptions = {
+  brainSwap:     boolean;
+  paletteMode:   PaletteMode;
+  accentVariant: AccentVariant;
+};
+
+export function deriveSkin(rng: () => number, opts: SkinOptions): Skin {
+  const { brainSwap, paletteMode, accentVariant } = opts;
   const family  = FAMILIES[Math.floor(rng() * FAMILIES.length)];
   const baseHue = family.hue + (rng() * 2 - 1) * 12; // jitter within the family
 
-  // Brian's Brain (swapTowerDying): the dying state is everywhere, so swap the
-  // tower and dying hues — the living tower takes the triadic (baseHue+120°) and
-  // pops, while dying cells take the base hue and recede into the same-hue sky.
+  // Brian's Brain (brainSwap): the dying state is everywhere, so swap the tower
+  // and dying hues — the living tower takes the triadic (baseHue+120°) and pops,
+  // while dying cells take the base hue and recede into the same-hue sky.
   const triadic  = (baseHue + 120) % 360;
-  const towerHue = swapTowerDying ? triadic : baseHue;
-  const dyingHue = swapTowerDying ? baseHue : triadic;
+  const towerHue = brainSwap ? triadic : baseHue;
+  const dyingHue = brainSwap ? baseHue : triadic;
 
   // Squared draw biases toward the low end: most towers read as muted stone,
   // a minority reach into richer saturation.
@@ -85,33 +104,63 @@ export function deriveSkin(rng: () => number, swapTowerDying = false): Skin {
   const bgL   = clamp01(towerL - (0.20 + rng() * 0.08)); // same hue, darker
   const bgSat = clamp01(towerSat * 1.1);
 
-  // Accent is one of two distinct looks (no muddy middle): either almost white
-  // or the saturated complementary color.
-  const accentHue   = (baseHue + 180) % 360; // complementary
-  const whiteAccent = rng() < 0.5;
-  const accentSat   = whiteAccent ? 0.05 + rng() * 0.05 : 0.70 + rng() * 0.2;
-  const accentL     = whiteAccent ? 0.92 + rng() * 0.05 : 0.65 + rng() * 0.12;
+  // ── Accent variant (independent of the palette mode — the one guaranteed pop)
+  let accentHue: number, accentSat: number, accentL: number;
+  let accentMode: 'solid' | 'prismatic' = 'solid';
+  switch (accentVariant) {
+    case 'White':
+      accentHue = baseHue; accentSat = 0.05 + rng() * 0.05; accentL = 0.92 + rng() * 0.05;
+      break;
+    case 'Complementary':
+      accentHue = (baseHue + 180) % 360; accentSat = 0.70 + rng() * 0.2; accentL = 0.65 + rng() * 0.12;
+      break;
+    case 'Gold':
+      accentHue = 45 + (rng() * 2 - 1) * 4; accentSat = 0.80 + rng() * 0.12; accentL = 0.58 + rng() * 0.08;
+      break;
+    case 'Prismatic':
+      // Renderer paints a per-cell rainbow; accentColor is only a neutral fallback.
+      accentMode = 'prismatic';
+      accentHue = baseHue; accentSat = 0.0; accentL = 0.85;
+      break;
+  }
+
+  // ── Palette mode: monochrome variants zero the scene saturation; the accent
+  // (above) stays colored. Noisy variants additionally carry a per-cell offset
+  // map that the renderer applies to the body cubes.
+  const mono  = paletteMode === 'monochrome' || paletteMode === 'noisymono';
+  const noisy = paletteMode === 'noisy'      || paletteMode === 'noisymono';
+  const tSat  = mono ? 0 : towerSat;
+  const bSat  = mono ? 0 : bgSat;
+
+  let noiseMap: Float32Array | undefined;
+  if (noisy) {
+    noiseMap = new Float32Array(NOISE_DIM * NOISE_DIM);
+    for (let i = 0; i < noiseMap.length; i++) noiseMap[i] = rng() * 2 - 1; // signed offset
+  }
 
   return {
     id:   family.name.toLowerCase(),
     name: family.name,
 
-    towerColor:      hslToHex(towerHue, towerSat, towerL),
-    towerNoiseColor: hslToHex(towerHue, towerSat * 0.9, towerL - 0.10),
+    towerColor:      hslToHex(towerHue, tSat, towerL),
+    towerNoiseColor: hslToHex(towerHue, tSat * 0.9, towerL - 0.10),
 
     accentColor:      hslToHex(accentHue, accentSat, accentL),
     accentNoiseColor: hslToHex(accentHue, accentSat * 0.95, accentL - 0.1),
 
     // Tower & dying share saturation/lightness; only their hue differs (and
     // swaps for Brian's Brain — see towerHue/dyingHue above).
-    dyingColor: hslToHex(dyingHue, towerSat, towerL),
+    dyingColor: hslToHex(dyingHue, tSat, towerL),
 
-    // Ground always uses the base hue at the noise tone (matches towerNoiseColor
-    // for non-brain; stays base-hue when brain swaps the tower hue to triadic).
-    groundColor: hslToHex(baseHue, towerSat * 0.9, towerL - 0.10),
+    // Ground always uses the base hue at the noise tone.
+    groundColor: hslToHex(baseHue, tSat * 0.9, towerL - 0.10),
 
-    backgroundColor: hslToHex(baseHue, bgSat, bgL),
-    gridColor:       hslToHex(accentHue, 0.40, 0.85),
+    backgroundColor: hslToHex(baseHue, bSat, bgL),
+    gridColor:       hslToHex(accentHue, mono ? 0 : 0.40, 0.85),
+
+    paletteMode,
+    accentMode,
+    noiseMap,
   };
 }
 
@@ -130,4 +179,7 @@ export const FALLBACK_SKIN: Skin = {
 
   backgroundColor: 'hsl(0, 0%, 12%)',
   gridColor:       '#ffffff',
+
+  paletteMode: 'standard',
+  accentMode:  'solid',
 };

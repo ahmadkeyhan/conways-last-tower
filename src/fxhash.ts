@@ -3,9 +3,18 @@
 // first in index.html. The snippet must stay a separate file (the sandbox locates
 // and version-checks it) — do NOT bundle the SDK. To refresh it, re-copy
 // node_modules/@fxhash/project-sdk/dist/fxhash.min.js into public/.
-import { SEED_DENSITY, pickSeedDensity, type RulesetName } from './engine';
+import type { RulesetName } from './engine';
 import type { StampTier } from './stamps';
 import { deriveSkin, type Skin } from './skin';
+import {
+  weightedPick, sampleDensity, rarityTier,
+  RULESET_WEIGHTS, RULESET_POINTS,
+  GRID_TIER_WEIGHTS, GRID_TIER_POINTS, GRID_TIER_RANGE,
+  DENSITY_TIER_WEIGHTS, DENSITY_TIER_POINTS,
+  ACCENT_WEIGHTS, ACCENT_POINTS,
+  PALETTE_WEIGHTS, PALETTE_POINTS, PALETTE_LABEL,
+  type AccentVariant, type PaletteMode, type RarityTier,
+} from './rarity';
 
 // Minimal local typing for the snippet's $fx — only the members we use. Keeps
 // the build decoupled from the SDK package (which is not imported at runtime).
@@ -23,12 +32,16 @@ declare global {
 // ── Trait extraction ──────────────────────────────────────────────────────────
 
 export type TokenTraits = {
-  gridSize:     number;       // max grid dimension (N)
+  gridSize:     number;        // grid dimension (N), sampled within the grid tier
   ruleset:      RulesetName;
-  stampTier:    StampTier;    // internal — edit-mode stamp library (not a feature)
-  historyDepth: number;       // internal — max generations stored (not a feature)
-  seedDensity:  number;       // opening-soup live fraction (sampled in the ruleset's band)
+  stampTier:    StampTier;     // internal — edit-mode stamp library (not a feature)
+  historyDepth: number;        // internal — max generations stored (not a feature)
+  seedDensity:  number;        // opening-soup live fraction (ruleset-aware band)
   skinId:       string;
+  // Rarity axes
+  accent:       AccentVariant;
+  palette:      PaletteMode;
+  rarity:       RarityTier;
 };
 
 export type FxContext = {
@@ -41,18 +54,6 @@ export type FxContext = {
   preview:   () => void;  // signal the snapshot is ready ($fx.preview())
 };
 
-// ── Feature bucketing — fxhash rarity works best with few distinct values ──────
-
-const gridTier = (n: number): string =>
-  n <= 85 ? 'Small' : n <= 106 ? 'Medium' : 'Large';
-
-// Position of the sampled density within its ruleset's band → coarse tier.
-function densityTier(name: RulesetName, v: number): string {
-  const [lo, hi] = SEED_DENSITY[name];
-  const t = (v - lo) / (hi - lo);
-  return t < 1 / 3 ? 'Sparse' : t < 2 / 3 ? 'Balanced' : 'Dense';
-}
-
 const RULESET_LABEL: Record<RulesetName, string> = {
   classic:  'Classic',
   highlife: 'HighLife',
@@ -62,44 +63,60 @@ const RULESET_LABEL: Record<RulesetName, string> = {
 };
 
 export function initFx(): FxContext {
-  const api = window.$fx; // defined by the bundled @fxhash/project-sdk import
+  const api = window.$fx; // defined by the standalone fxhash snippet
 
   const rng = () => api.rand();
 
-  function pick<T>(choices: T[]): T {
-    return choices[Math.floor(rng() * choices.length)];
-  }
+  const pick = <T,>(choices: T[]): T => choices[Math.floor(rng() * choices.length)];
+  const lerp = (min: number, max: number): number => Math.floor(rng() * (max - min + 1)) + min;
 
-  function lerp(min: number, max: number): number {
-    return Math.floor(rng() * (max - min + 1)) + min;
-  }
+  // ── Weighted draws (fixed order — deterministic per seed) ─────────────────
+  //   ruleset → palette → accent → skin → gridTier+value → density(tier+value)
+  const ruleset       = weightedPick(rng, RULESET_WEIGHTS);
+  const paletteMode   = weightedPick(rng, PALETTE_WEIGHTS);
+  const accentVariant = weightedPick(rng, ACCENT_WEIGHTS);
 
-  const rulesetNames: RulesetName[] = ['classic', 'highlife', 'maze', 'daynight', 'brain'];
+  const skin = deriveSkin(rng, {
+    brainSwap: ruleset === 'brain', // never true while brain is out of the draw
+    paletteMode,
+    accentVariant,
+  });
 
-  // Picked first so the rng stream stays stable; deriveSkin needs it (Brian's
-  // Brain swaps the tower/dying hues since dying cells are everywhere).
-  const ruleset: RulesetName = pick(rulesetNames);
+  const gridTier   = weightedPick(rng, GRID_TIER_WEIGHTS);
+  const [gLo, gHi] = GRID_TIER_RANGE[gridTier];
+  const gridSize   = lerp(gLo, gHi);
 
-  // Seed-derived palette — drawn at a fixed point after the ruleset.
-  const skin = deriveSkin(rng, ruleset === 'brain');
+  const densityTier = weightedPick(rng, DENSITY_TIER_WEIGHTS);
+  const seedDensity = sampleDensity(rng, ruleset, densityTier);
 
-  // Fixed draw order: ruleset → skin → gridSize → stampTier → historyDepth → seedDensity.
+  // Internal-only traits (not features); drawn last so they don't perturb the
+  // rarity-relevant stream above.
+  const stampTier    = pick([1, 2, 3, 4, 5, 6]) as StampTier;
+  const historyDepth = lerp(100, 200);
+
+  // ── Rarity score → tier ───────────────────────────────────────────────────
+  const points =
+    RULESET_POINTS[ruleset] +
+    GRID_TIER_POINTS[gridTier] +
+    DENSITY_TIER_POINTS[densityTier] +
+    ACCENT_POINTS[accentVariant] +
+    PALETTE_POINTS[paletteMode];
+  const rarity = rarityTier(points);
+
   const traits: TokenTraits = {
-    gridSize:     lerp(64, 128),
-    ruleset,
-    stampTier:    pick([1, 2, 3, 4, 5, 6]) as StampTier,
-    historyDepth: lerp(100, 200),
-    seedDensity:  pickSeedDensity(ruleset, rng),
-    skinId:       skin.id,
+    gridSize, ruleset, stampTier, historyDepth, seedDensity,
+    skinId: skin.id, accent: accentVariant, palette: paletteMode, rarity,
   };
 
-  // Public features — bucketed for fxhash rarity. Stamp Library / History Depth
-  // are intentionally omitted (they don't affect the autonomous render).
+  // Public features (7). Grid Size / Seed Density show the drawn tier.
   api.features({
     'Ruleset':      RULESET_LABEL[ruleset],
     'Skin':         skin.name,
-    'Grid Size':    gridTier(traits.gridSize),
-    'Seed Density': densityTier(ruleset, traits.seedDensity),
+    'Grid Size':    gridTier,
+    'Seed Density': densityTier,
+    'Accent':       accentVariant,
+    'Palette':      PALETTE_LABEL[paletteMode],
+    'Rarity':       rarity,
   });
 
   return {

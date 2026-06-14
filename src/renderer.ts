@@ -128,6 +128,11 @@ export class Renderer {
   private _editAmt = 0;
   private _editTarget = 0;
 
+  // Per-cell noise / prismatic scratch — reused across cells (no per-cell alloc)
+  private readonly _hsl = { h: 0, s: 0, l: 0 };
+  private readonly _bodyScratch = new THREE.Color();
+  private readonly _capScratch  = new THREE.Color();
+
   // Picking scratch objects (pickCell) — reused across calls
   private readonly _raycaster = new THREE.Raycaster();
   private readonly _ndc       = new THREE.Vector2();
@@ -588,6 +593,14 @@ export class Renderer {
     const capY   = layerY + 0.5 + 0.01; // top face + z-fight epsilon
     let count = 0;
 
+    // Rarity variant flags (read once per build)
+    const pal       = this.skin.paletteMode;
+    const noisy     = pal === 'noisy' || pal === 'noisymono';
+    const hueShift  = pal === 'noisy'; // noisymono shifts lightness only
+    const nmap      = this.skin.noiseMap;
+    const prismatic = this.skin.accentMode === 'prismatic';
+    const denom     = rows + cols;
+
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const state = data[r * cols + c];
@@ -598,15 +611,36 @@ export class Renderer {
         this.liveMesh.setMatrixAt(count, this._mat);
         this._mat.makeTranslation(x, capY, z);
         this.capMesh.setMatrixAt(count, this._mat);
-        // Body color: dying cells (Brian's Brain state 2) get the flat accent
-        // as a clear "fading" indicator; living cells use the speckled tower
-        // colors (independent hash draws so cap speckle ≠ body speckle).
-        this.liveMesh.setColorAt(count, state === 2
+
+        // ── Body color ──────────────────────────────────────────────────────
+        // Dying cells (Brian's Brain state 2) get the flat dying tone; living
+        // cells use the speckled tower colors (hash-picked main vs noise).
+        let body: THREE.Color = state === 2
           ? this._dyingColor
-          : (cellNoise(r, c, layerIndex, 0x9e3779b9) ? this._towerNoise : this._towerMain));
-        this.capMesh.setColorAt(count, state === 2
-          ? this._dyingCap
-          : (cellNoise(r, c, layerIndex, 0x517cc1b7) ? this._accentNoise : this._accentMain));
+          : (cellNoise(r, c, layerIndex, 0x9e3779b9) ? this._towerNoise : this._towerMain);
+        // Noisy / NoisyMono: per-cell HSL offset on top of the speckle.
+        if (noisy && state !== 2 && nmap) {
+          const v = nmap[r * cols + c];
+          body.getHSL(this._hsl);
+          const h = hueShift ? ((this._hsl.h + v * 0.04) % 1 + 1) % 1 : this._hsl.h;
+          const l = Math.min(1, Math.max(0, this._hsl.l + v * 0.10));
+          this._bodyScratch.setHSL(h, this._hsl.s, l);
+          body = this._bodyScratch;
+        }
+        this.liveMesh.setColorAt(count, body);
+
+        // ── Cap color ───────────────────────────────────────────────────────
+        let cap: THREE.Color;
+        if (state === 2) {
+          cap = this._dyingCap;
+        } else if (prismatic) {
+          // Rainbow gradient across the top face (visible in the static capture).
+          this._capScratch.setHSL(((r + c) / denom) % 1, 0.7, 0.6);
+          cap = this._capScratch;
+        } else {
+          cap = cellNoise(r, c, layerIndex, 0x517cc1b7) ? this._accentNoise : this._accentMain;
+        }
+        this.capMesh.setColorAt(count, cap);
         count++;
       }
     }
