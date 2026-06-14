@@ -73,7 +73,7 @@ export function sampleDensity(
 
 // ── Accent variant ─────────────────────────────────────────────────────────────
 export const ACCENT_WEIGHTS: readonly [AccentVariant, number][] = [
-  ['White', 50], ['Complementary', 30], ['Gold', 14], ['Prismatic', 6],
+  ['White', 46], ['Complementary', 30], ['Gold', 15], ['Prismatic', 9],
 ];
 export const ACCENT_POINTS: Record<AccentVariant, number> = {
   White: 0, Complementary: 1, Gold: 2, Prismatic: 4,
@@ -81,7 +81,7 @@ export const ACCENT_POINTS: Record<AccentVariant, number> = {
 
 // ── Palette mode ───────────────────────────────────────────────────────────────
 export const PALETTE_WEIGHTS: readonly [PaletteMode, number][] = [
-  ['standard', 50], ['monochrome', 30], ['noisy', 14], ['noisymono', 6],
+  ['standard', 46], ['monochrome', 30], ['noisy', 15], ['noisymono', 9],
 ];
 export const PALETTE_POINTS: Record<PaletteMode, number> = {
   standard: 0, monochrome: 1, noisy: 2, noisymono: 4,
@@ -91,9 +91,9 @@ export const PALETTE_LABEL: Record<PaletteMode, string> = {
 };
 
 // ── Rarity tier ────────────────────────────────────────────────────────────────
-// Thresholds calibrated by 100k simulation against the weight tables above.
-// Resulting frequencies ≈ Common 44% · Uncommon 35% · Rare 16% · Epic 4.5% ·
-// Legendary 0.9% (best discrete fit to the 50/28/15/5.5/1.5 target).
+// Thresholds + weights calibrated by 200k simulation. Resulting frequencies ≈
+// Common 39% · Uncommon 34% · Rare 18% · Epic 6.5% · Legendary 1.6%
+// (Prismatic/NoisyMono weights were bumped to lift Legendary onto its ~1.5% target).
 export function rarityTier(points: number): RarityTier {
   if (points <= 3) return 'Common';
   if (points <= 5) return 'Uncommon';
