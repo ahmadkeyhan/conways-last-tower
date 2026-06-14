@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import type { Grid } from './engine';
 import type { Skin } from './skin';
 
@@ -132,6 +133,7 @@ export class Renderer {
   private readonly _hsl = { h: 0, s: 0, l: 0 };
   private readonly _bodyScratch = new THREE.Color();
   private readonly _capScratch  = new THREE.Color();
+  private readonly _white = new THREE.Color(0.1, 0.1, 0.1); // chrome caps: PBR does the work
 
   // Picking scratch objects (pickCell) — reused across calls
   private readonly _raycaster = new THREE.Raycaster();
@@ -256,17 +258,25 @@ export class Renderer {
       new THREE.InstancedBufferAttribute(new Float32Array(rows * cols * 3), 3);
 
     // Accent cap — flat plane resting on each live cube's top face.
-    // MeshBasicMaterial: flat unlit accent, matching the old 2D cap diamond.
     const capPlane = new THREE.PlaneGeometry(1, 1);
     capPlane.rotateX(-Math.PI / 2); // lie flat, facing +Y
-    this.capMesh = new THREE.InstancedMesh(
-      capPlane,
-      // fog: false — caps sit at the tower top and must stay full-bright;
-      // the basic material isn't fog-patched, so default fog would wash it out.
+    // Chrome accent → reflective PBR caps (need an env map to reflect something);
+    // every other accent → flat unlit caps carrying per-instance colors.
+    // fog: false — caps sit at the tower top and must stay full-bright.
+    let capMat: THREE.Material;
+    if (skin.accentMode === 'metallic') {
+      const pmrem = new THREE.PMREMGenerator(this.gl);
+      const envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      pmrem.dispose();
+      capMat = new THREE.MeshStandardMaterial({
+        color: 0xffffff, metalness: 1.0, roughness: 0.16,
+        envMap: envTex, envMapIntensity: 1.5, fog: false,
+      });
+    } else {
       // White base color — per-instance colors carry the accent/noise mix.
-      new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false }),
-      rows * cols,
-    );
+      capMat = new THREE.MeshBasicMaterial({ color: 0xffffff, fog: false });
+    }
+    this.capMesh = new THREE.InstancedMesh(capPlane, capMat, rows * cols);
     this.capMesh.count = 0;
     this.capMesh.instanceColor =
       new THREE.InstancedBufferAttribute(new Float32Array(rows * cols * 3), 3);
@@ -599,6 +609,7 @@ export class Renderer {
     const rainbow   = pal === 'rainbow';
     const nmap      = this.skin.noiseMap;
     const prismatic = this.skin.accentMode === 'prismatic';
+    const metallic  = this.skin.accentMode === 'metallic';
     const denom     = rows + cols;
     // Rainbow uses the token's tower lightness so it sits in the same tonal range.
     this._towerMain.getHSL(this._hsl);
@@ -643,6 +654,10 @@ export class Renderer {
         let cap: THREE.Color;
         if (state === 2) {
           cap = this._dyingCap;
+        } else if (metallic) {
+          // White instance tint — the PBR material's metalness + env reflection
+          // gives the chrome look; per-cell color would only mute it.
+          cap = this._white;
         } else if (prismatic) {
           // Rainbow gradient across the top face (visible in the static capture).
           this._capScratch.setHSL(((r + c) / denom) % 1, 0.7, 0.6);

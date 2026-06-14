@@ -7,7 +7,7 @@ import type { RulesetName } from './engine';
 
 export type GridTier      = 'Small' | 'Medium' | 'Large';
 export type DensityTier   = 'Sparse' | 'Balanced' | 'Dense';
-export type AccentVariant = 'White' | 'Complementary' | 'Silver' | 'Prismatic';
+export type AccentVariant = 'White' | 'Complementary' | 'Chrome' | 'Prismatic';
 export type PaletteMode    = 'standard' | 'monochrome' | 'noisy' | 'rainbow';
 export type RarityTier    = 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary';
 
@@ -47,36 +47,36 @@ export const DENSITY_TIER_POINTS: Record<DensityTier, number> = {
   Balanced: 0, Sparse: 1, Dense: 1,
 };
 
-// Per-ruleset sustainable density centers. Density is relative to what each rule
-// can keep alive — Maze/Brain saturate fast so they live near ~0.08; Day & Night
-// needs ~0.4+ or it collapses. Value = center + triangular jitter (±spread).
-export const DENSITY_BANDS: Record<
-  RulesetName,
-  { sparse: number; balanced: number; dense: number; spread: number }
-> = {
-  classic:  { sparse: 0.20, balanced: 0.30, dense: 0.42, spread: 0.05 },
-  highlife: { sparse: 0.20, balanced: 0.30, dense: 0.42, spread: 0.05 },
-  maze:     { sparse: 0.05, balanced: 0.08, dense: 0.11, spread: 0.02 },
-  daynight: { sparse: 0.32, balanced: 0.42, dense: 0.50, spread: 0.05 },
-  brain:    { sparse: 0.05, balanced: 0.08, dense: 0.11, spread: 0.02 },
+// Per-ruleset sustainable density range [lo, hi]. Density is relative to what
+// each rule can keep alive — the tier picks a sub-region of this range.
+export const SEED_DENSITY: Record<RulesetName, readonly [number, number]> = {
+  classic:  [0.30, 0.38], // standard soup — long-lived dynamics before settling
+  highlife: [0.30, 0.38], // like classic plus replicators
+  maze:     [0.03, 0.07], // permissive survival saturates fast
+  daynight: [0.42, 0.50], // self-complementary; needs density near 0.5 or it collapses
+  brain:    [0.03, 0.07], // kept for code integrity — never drawn
 };
 
-// Triangular sample around the band's tier center (two-rng average → peak at center).
+// Map the tier to a center within the ruleset's range, then triangular-sample
+// around it (two-rng average → peak at center), clamped back into the range.
 export function sampleDensity(
   rng: () => number, ruleset: RulesetName, tier: DensityTier,
 ): number {
-  const band = DENSITY_BANDS[ruleset];
-  const center = tier === 'Sparse' ? band.sparse : tier === 'Dense' ? band.dense : band.balanced;
-  const jitter = (rng() + rng() - 1) * band.spread; // triangular in [-spread, +spread]
-  return Math.min(0.95, Math.max(0.01, center + jitter));
+  const [lo, hi] = SEED_DENSITY[ruleset];
+  const span   = hi - lo;
+  const center = tier === 'Sparse' ? lo + span * 0.17
+               : tier === 'Dense'  ? hi - span * 0.17
+               : lo + span * 0.5;
+  const jitter = (rng() + rng() - 1) * span * 0.22;
+  return Math.min(hi, Math.max(lo, center + jitter));
 }
 
 // ── Accent variant ─────────────────────────────────────────────────────────────
 export const ACCENT_WEIGHTS: readonly [AccentVariant, number][] = [
-  ['White', 46], ['Complementary', 30], ['Silver', 15], ['Prismatic', 9],
+  ['White', 46], ['Complementary', 30], ['Chrome', 15], ['Prismatic', 9],
 ];
 export const ACCENT_POINTS: Record<AccentVariant, number> = {
-  White: 0, Complementary: 1, Silver: 2, Prismatic: 4,
+  White: 0, Complementary: 1, Chrome: 2, Prismatic: 4,
 };
 
 // ── Palette mode ───────────────────────────────────────────────────────────────

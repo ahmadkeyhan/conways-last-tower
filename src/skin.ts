@@ -26,7 +26,8 @@ export type Skin = {
 
   // ── Rarity variants ──────────────────────────────────────────────────────
   paletteMode: PaletteMode;          // standard | monochrome | noisy | rainbow
-  accentMode:  'solid' | 'prismatic'; // prismatic → renderer paints rainbow caps
+  // solid → flat caps · prismatic → rainbow caps · metallic → reflective PBR caps
+  accentMode:  'solid' | 'prismatic' | 'metallic';
   // Per-cell HSL offsets for noisy (undefined otherwise). Signed values in
   // ~[-1, 1]; renderer scales into hue/lightness deltas.
   noiseMap?:   Float32Array;
@@ -106,7 +107,7 @@ export function deriveSkin(rng: () => number, opts: SkinOptions): Skin {
 
   // ── Accent variant (independent of the palette mode — the one guaranteed pop)
   let accentHue: number, accentSat: number, accentL: number;
-  let accentMode: 'solid' | 'prismatic' = 'solid';
+  let accentMode: 'solid' | 'prismatic' | 'metallic' = 'solid';
   let flatAccent = false; // true → cap has no speckle (noiseColor === color)
   switch (accentVariant) {
     case 'White':
@@ -115,9 +116,11 @@ export function deriveSkin(rng: () => number, opts: SkinOptions): Skin {
     case 'Complementary':
       accentHue = (baseHue + 180) % 360; accentSat = 0.70 + rng() * 0.2; accentL = 0.65 + rng() * 0.12;
       break;
-    case 'Silver':
-      // Cool, near-neutral metallic grey — flat (no speckle) for a clean sheen.
-      accentHue = 210; accentSat = 0.04; accentL = 0.76 + rng() * 0.06;
+    case 'Chrome':
+      // Reflective neutral metal — the renderer gives the caps a PBR material
+      // (metalness/roughness) + env map. accentColor is only the ghost/CSS tint.
+      accentMode = 'metallic';
+      accentHue = 210; accentSat = 0.03; accentL = 0.82;
       flatAccent = true;
       break;
     case 'Prismatic':
