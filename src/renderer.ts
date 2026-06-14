@@ -192,7 +192,7 @@ export class Renderer {
 
     // ── Lighting ──────────────────────────────────────────────────────────
     // Hemisphere ambient: cool sky / dark ground for soft color variation.
-    this.scene.add(new THREE.HemisphereLight(0xbfbfbf, 0x161616, 0.55));
+    this.scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x16161c, 0.55));
 
     // Warm key light from the upper right — casts the soft cube shadows.
     // Position and target follow the tower top (see _trackCamera).
