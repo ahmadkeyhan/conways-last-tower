@@ -108,10 +108,17 @@ export function initFx(): FxContext {
     skinId: skin.id, accent: accentVariant, palette: paletteMode, rarity,
   };
 
-  // Public features (7). Grid Size / Seed Density show the drawn tier.
+  // Public features (7). Grid Size / Seed Density show the drawn tier. The Skin
+  // hue family is only meaningful when the tower carries that hue — monochrome
+  // greyscales the scene and rainbow spans every hue, so report those instead.
+  const skinFeature =
+    paletteMode === 'monochrome' ? 'Greyscale'
+    : paletteMode === 'rainbow'  ? 'Spectrum'
+    : skin.name;
+
   api.features({
     'Ruleset':      RULESET_LABEL[ruleset],
-    'Skin':         skin.name,
+    'Skin':         skinFeature,
     'Grid Size':    gridTier,
     'Seed Density': densityTier,
     'Accent':       accentVariant,

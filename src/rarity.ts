@@ -7,8 +7,8 @@ import type { RulesetName } from './engine';
 
 export type GridTier      = 'Small' | 'Medium' | 'Large';
 export type DensityTier   = 'Sparse' | 'Balanced' | 'Dense';
-export type AccentVariant = 'White' | 'Complementary' | 'Gold' | 'Prismatic';
-export type PaletteMode    = 'standard' | 'monochrome' | 'noisy' | 'noisymono';
+export type AccentVariant = 'White' | 'Complementary' | 'Silver' | 'Prismatic';
+export type PaletteMode    = 'standard' | 'monochrome' | 'noisy' | 'rainbow';
 export type RarityTier    = 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary';
 
 // ── Weighted pick ──────────────────────────────────────────────────────────────
@@ -73,21 +73,21 @@ export function sampleDensity(
 
 // ── Accent variant ─────────────────────────────────────────────────────────────
 export const ACCENT_WEIGHTS: readonly [AccentVariant, number][] = [
-  ['White', 46], ['Complementary', 30], ['Gold', 15], ['Prismatic', 9],
+  ['White', 46], ['Complementary', 30], ['Silver', 15], ['Prismatic', 9],
 ];
 export const ACCENT_POINTS: Record<AccentVariant, number> = {
-  White: 0, Complementary: 1, Gold: 2, Prismatic: 4,
+  White: 0, Complementary: 1, Silver: 2, Prismatic: 4,
 };
 
 // ── Palette mode ───────────────────────────────────────────────────────────────
 export const PALETTE_WEIGHTS: readonly [PaletteMode, number][] = [
-  ['standard', 46], ['monochrome', 30], ['noisy', 15], ['noisymono', 9],
+  ['standard', 50], ['monochrome', 30], ['noisy', 14], ['rainbow', 6],
 ];
 export const PALETTE_POINTS: Record<PaletteMode, number> = {
-  standard: 0, monochrome: 1, noisy: 2, noisymono: 4,
+  standard: 0, monochrome: 1, noisy: 2, rainbow: 4,
 };
 export const PALETTE_LABEL: Record<PaletteMode, string> = {
-  standard: 'Standard', monochrome: 'Monochrome', noisy: 'Noisy', noisymono: 'NoisyMono',
+  standard: 'Standard', monochrome: 'Monochrome', noisy: 'Noisy', rainbow: 'Rainbow',
 };
 
 // ── Rarity tier ────────────────────────────────────────────────────────────────

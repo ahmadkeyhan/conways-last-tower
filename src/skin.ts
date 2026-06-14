@@ -107,6 +107,7 @@ export function deriveSkin(rng: () => number, opts: SkinOptions): Skin {
   // ── Accent variant (independent of the palette mode — the one guaranteed pop)
   let accentHue: number, accentSat: number, accentL: number;
   let accentMode: 'solid' | 'prismatic' = 'solid';
+  let flatAccent = false; // true → cap has no speckle (noiseColor === color)
   switch (accentVariant) {
     case 'White':
       accentHue = baseHue; accentSat = 0.05 + rng() * 0.05; accentL = 0.92 + rng() * 0.05;
@@ -114,8 +115,10 @@ export function deriveSkin(rng: () => number, opts: SkinOptions): Skin {
     case 'Complementary':
       accentHue = (baseHue + 180) % 360; accentSat = 0.70 + rng() * 0.2; accentL = 0.65 + rng() * 0.12;
       break;
-    case 'Gold':
-      accentHue = 45 + (rng() * 2 - 1) * 4; accentSat = 0.80 + rng() * 0.12; accentL = 0.58 + rng() * 0.08;
+    case 'Silver':
+      // Cool, near-neutral metallic grey — flat (no speckle) for a clean sheen.
+      accentHue = 210; accentSat = 0.04; accentL = 0.76 + rng() * 0.06;
+      flatAccent = true;
       break;
     case 'Prismatic':
       // Renderer paints a per-cell rainbow; accentColor is only a neutral fallback.
@@ -123,12 +126,17 @@ export function deriveSkin(rng: () => number, opts: SkinOptions): Skin {
       accentHue = baseHue; accentSat = 0.0; accentL = 0.85;
       break;
   }
+  const accentColor      = hslToHex(accentHue, accentSat, accentL);
+  const accentNoiseColor = flatAccent
+    ? accentColor
+    : hslToHex(accentHue, accentSat * 0.95, accentL - 0.1);
 
-  // ── Palette mode: monochrome variants zero the scene saturation; the accent
-  // (above) stays colored. Noisy variants additionally carry a per-cell offset
-  // map that the renderer applies to the body cubes.
-  const mono  = paletteMode === 'monochrome' || paletteMode === 'noisymono';
-  const noisy = paletteMode === 'noisy'      || paletteMode === 'noisymono';
+  // ── Palette mode. Monochrome zeroes the scene saturation (accent stays the one
+  // pop). Noisy carries a per-cell HSL offset map the renderer applies to the
+  // body cubes. Rainbow is painted entirely by the renderer (unsaturated rainbow
+  // across the body), so the skin keeps standard colors here.
+  const mono  = paletteMode === 'monochrome';
+  const noisy = paletteMode === 'noisy';
   const tSat  = mono ? 0 : towerSat;
   const bSat  = mono ? 0 : bgSat;
 
@@ -145,8 +153,8 @@ export function deriveSkin(rng: () => number, opts: SkinOptions): Skin {
     towerColor:      hslToHex(towerHue, tSat, towerL),
     towerNoiseColor: hslToHex(towerHue, tSat * 0.9, towerL - 0.10),
 
-    accentColor:      hslToHex(accentHue, accentSat, accentL),
-    accentNoiseColor: hslToHex(accentHue, accentSat * 0.95, accentL - 0.1),
+    accentColor,
+    accentNoiseColor,
 
     // Tower & dying share saturation/lightness; only their hue differs (and
     // swaps for Brian's Brain — see towerHue/dyingHue above).

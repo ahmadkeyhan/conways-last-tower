@@ -595,11 +595,14 @@ export class Renderer {
 
     // Rarity variant flags (read once per build)
     const pal       = this.skin.paletteMode;
-    const noisy     = pal === 'noisy' || pal === 'noisymono';
-    const hueShift  = pal === 'noisy'; // noisymono shifts lightness only
+    const noisy     = pal === 'noisy';
+    const rainbow   = pal === 'rainbow';
     const nmap      = this.skin.noiseMap;
     const prismatic = this.skin.accentMode === 'prismatic';
     const denom     = rows + cols;
+    // Rainbow uses the token's tower lightness so it sits in the same tonal range.
+    this._towerMain.getHSL(this._hsl);
+    const towerL = this._hsl.l;
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
@@ -615,17 +618,24 @@ export class Renderer {
         // ── Body color ──────────────────────────────────────────────────────
         // Dying cells (Brian's Brain state 2) get the flat dying tone; living
         // cells use the speckled tower colors (hash-picked main vs noise).
-        let body: THREE.Color = state === 2
-          ? this._dyingColor
-          : (cellNoise(r, c, layerIndex, 0x9e3779b9) ? this._towerNoise : this._towerMain);
-        // Noisy / NoisyMono: per-cell HSL offset on top of the speckle.
-        if (noisy && state !== 2 && nmap) {
-          const v = nmap[r * cols + c];
-          body.getHSL(this._hsl);
-          const h = hueShift ? ((this._hsl.h + v * 0.04) % 1 + 1) % 1 : this._hsl.h;
-          const l = Math.min(1, Math.max(0, this._hsl.l + v * 0.10));
-          this._bodyScratch.setHSL(h, this._hsl.s, l);
+        let body: THREE.Color;
+        if (state === 2) {
+          body = this._dyingColor;
+        } else if (rainbow) {
+          // Unsaturated rainbow across the body — pastel hue by diagonal position.
+          this._bodyScratch.setHSL(((r + c) / denom) % 1, 0.30, towerL);
           body = this._bodyScratch;
+        } else {
+          body = cellNoise(r, c, layerIndex, 0x9e3779b9) ? this._towerNoise : this._towerMain;
+          // Noisy: per-cell hue + lightness offset on top of the speckle.
+          if (noisy && nmap) {
+            const v = nmap[r * cols + c];
+            body.getHSL(this._hsl);
+            const h = ((this._hsl.h + v * 0.04) % 1 + 1) % 1;
+            const l = Math.min(1, Math.max(0, this._hsl.l + v * 0.10));
+            this._bodyScratch.setHSL(h, this._hsl.s, l);
+            body = this._bodyScratch;
+          }
         }
         this.liveMesh.setColorAt(count, body);
 
