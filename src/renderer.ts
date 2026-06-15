@@ -622,7 +622,7 @@ export class Renderer {
     // tower's footprint width, so in landscape (aspect ≥ 1) it always fits.
     // In portrait the vertical frustum must grow so the horizontal extent
     // never shrinks below the footprint width (+8 % margin).
-    this.viewH = aspect >= 1 ? this.frustumH : (this.frustumH * 1.08) / aspect;
+    this.viewH = aspect >= 1 ? this.frustumH * 1.5 : (this.frustumH * 1.2) / aspect;
     this._applyProjection();
     // Pivot placement depends on viewH — recenter on the current tower top
     this._trackCamera();
