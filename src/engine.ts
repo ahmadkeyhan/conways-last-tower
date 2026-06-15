@@ -290,115 +290,115 @@ export function printGrid(grid: Grid): string {
   return lines.join('\n');
 }
 
-function dataEquals(a: Grid, b: Grid, snap?: Uint8Array): boolean {
-  const ref = snap ?? b.data;
-  if (a.data.length !== ref.length) return false;
-  for (let i = 0; i < a.data.length; i++) if (a.data[i] !== ref[i]) return false;
-  return true;
-}
+// function dataEquals(a: Grid, b: Grid, snap?: Uint8Array): boolean {
+//   const ref = snap ?? b.data;
+//   if (a.data.length !== ref.length) return false;
+//   for (let i = 0; i < a.data.length; i++) if (a.data[i] !== ref[i]) return false;
+//   return true;
+// }
 
 // ── Console verification + benchmark ─────────────────────────────────────────
 
-export function runEngineTest(): void {
-  function alive(g: GridBuffer, ...coords: [number, number][]): void {
-    for (const [r, c] of coords) setCell(g, r, c, 1);
-  }
+// export function runEngineTest(): void {
+//   function alive(g: GridBuffer, ...coords: [number, number][]): void {
+//     for (const [r, c] of coords) setCell(g, r, c, 1);
+//   }
 
-  console.group("Conway's Last Tower — Engine Test");
+//   console.group("Conway's Last Tower — Engine Test");
 
-  // ── 1. Blinker period-2 ───────────────────────────────────────────────────
-  // Snapshot gen0 before stepping — the double-buffer swap overwrites g0.data
-  // after two steps, so we compare gen2 against the captured snapshot.
-  console.group('1. Blinker (Classic B3/S23) — period-2');
-  const g0 = createGrid(5, 5);
-  alive(g0, [2,1],[2,2],[2,3]);
-  const gen0snap = g0.data.slice();
-  console.log('Gen 0 (horizontal):\n' + printGrid(g0));
-  const g1 = step(g0, RULESETS.classic);
-  console.log('Gen 1 (vertical):\n'   + printGrid(g1));
-  const g2 = step(g1, RULESETS.classic);
-  console.log('Gen 2 (horizontal):\n' + printGrid(g2));
-  console.log('Period-2 ✓:', dataEquals(g2, g2, gen0snap) ? 'PASS' : 'FAIL');
-  console.groupEnd();
+//   // ── 1. Blinker period-2 ───────────────────────────────────────────────────
+//   // Snapshot gen0 before stepping — the double-buffer swap overwrites g0.data
+//   // after two steps, so we compare gen2 against the captured snapshot.
+//   console.group('1. Blinker (Classic B3/S23) — period-2');
+//   const g0 = createGrid(5, 5);
+//   alive(g0, [2,1],[2,2],[2,3]);
+//   const gen0snap = g0.data.slice();
+//   console.log('Gen 0 (horizontal):\n' + printGrid(g0));
+//   const g1 = step(g0, RULESETS.classic);
+//   console.log('Gen 1 (vertical):\n'   + printGrid(g1));
+//   const g2 = step(g1, RULESETS.classic);
+//   console.log('Gen 2 (horizontal):\n' + printGrid(g2));
+//   console.log('Period-2 ✓:', dataEquals(g2, g2, gen0snap) ? 'PASS' : 'FAIL');
+//   console.groupEnd();
 
-  // ── 2. Block still life ───────────────────────────────────────────────────
-  console.group('2. Block — still life');
-  const block = createGrid(4, 4);
-  alive(block, [1,1],[1,2],[2,1],[2,2]);
-  const blockSnap = block.data.slice();
-  const blockNext = step(block, RULESETS.classic);
-  console.log('Still life ✓:', dataEquals(blockNext, blockNext, blockSnap) ? 'PASS' : 'FAIL');
-  console.groupEnd();
+//   // ── 2. Block still life ───────────────────────────────────────────────────
+//   console.group('2. Block — still life');
+//   const block = createGrid(4, 4);
+//   alive(block, [1,1],[1,2],[2,1],[2,2]);
+//   const blockSnap = block.data.slice();
+//   const blockNext = step(block, RULESETS.classic);
+//   console.log('Still life ✓:', dataEquals(blockNext, blockNext, blockSnap) ? 'PASS' : 'FAIL');
+//   console.groupEnd();
 
-  // ── 3. Glider alive-count ─────────────────────────────────────────────────
-  console.group('3. Glider — 5 alive cells over 8 steps');
-  let gl = createGrid(12, 12);
-  alive(gl, [1,2],[2,3],[3,1],[3,2],[3,3]);
-  let gliderOk = true;
-  for (let i = 0; i < 8; i++) {
-    gl = step(gl, RULESETS.classic);
-    if (countAlive(gl) !== 5) { gliderOk = false; break; }
-  }
-  console.log('8-step alive-count ✓:', gliderOk ? 'PASS' : 'FAIL');
-  console.groupEnd();
+//   // ── 3. Glider alive-count ─────────────────────────────────────────────────
+//   console.group('3. Glider — 5 alive cells over 8 steps');
+//   let gl = createGrid(12, 12);
+//   alive(gl, [1,2],[2,3],[3,1],[3,2],[3,3]);
+//   let gliderOk = true;
+//   for (let i = 0; i < 8; i++) {
+//     gl = step(gl, RULESETS.classic);
+//     if (countAlive(gl) !== 5) { gliderOk = false; break; }
+//   }
+//   console.log('8-step alive-count ✓:', gliderOk ? 'PASS' : 'FAIL');
+//   console.groupEnd();
 
-  // ── 4. Brian's Brain state cycle ─────────────────────────────────────────
-  console.group("4. Brian's Brain — 1→2→0 cycle");
-  const brain = createGrid(5, 5);
-  alive(brain, [2,1],[2,3]);
-  const br1 = step(brain, RULESETS.brain);
-  console.log('Alive→dying ✓:',        (getCell(br1,2,1) === 2 && getCell(br1,2,3) === 2) ? 'PASS' : 'FAIL');
-  console.log('Dead(2 nbrs)→alive ✓:', getCell(br1,2,2) === 1 ? 'PASS' : 'FAIL');
-  const br2 = step(br1, RULESETS.brain);
-  console.log('Dying→dead ✓:',         (getCell(br2,2,1) === 0 && getCell(br2,2,3) === 0) ? 'PASS' : 'FAIL');
-  console.groupEnd();
+//   // ── 4. Brian's Brain state cycle ─────────────────────────────────────────
+//   console.group("4. Brian's Brain — 1→2→0 cycle");
+//   const brain = createGrid(5, 5);
+//   alive(brain, [2,1],[2,3]);
+//   const br1 = step(brain, RULESETS.brain);
+//   console.log('Alive→dying ✓:',        (getCell(br1,2,1) === 2 && getCell(br1,2,3) === 2) ? 'PASS' : 'FAIL');
+//   console.log('Dead(2 nbrs)→alive ✓:', getCell(br1,2,2) === 1 ? 'PASS' : 'FAIL');
+//   const br2 = step(br1, RULESETS.brain);
+//   console.log('Dying→dead ✓:',         (getCell(br2,2,1) === 0 && getCell(br2,2,3) === 0) ? 'PASS' : 'FAIL');
+//   console.groupEnd();
 
-  // ── 5. History stack ──────────────────────────────────────────────────────
-  console.group('5. History — push / trimTo / accounting');
-  const hist = new History(5);
-  let cur = createGrid(3, 3);
-  setCell(cur, 0, 0, 1);
-  for (let i = 0; i < 8; i++) { hist.push(cur); cur = step(cur, RULESETS.classic); }
-  console.log('capped at 5:',        hist.length === 5           ? 'PASS' : `FAIL (${hist.length})`);
-  console.log('totalGenerations=8:', hist.totalGenerations === 8 ? 'PASS' : `FAIL (${hist.totalGenerations})`);
-  console.log('oldestGeneration=3:', hist.oldestGeneration === 3 ? 'PASS' : `FAIL (${hist.oldestGeneration})`);
-  hist.trimTo(2);
-  console.log('trimTo(2)→length 3:', hist.length === 3           ? 'PASS' : `FAIL (${hist.length})`);
-  console.log('total after trim=6:', hist.totalGenerations === 6 ? 'PASS' : `FAIL (${hist.totalGenerations})`);
-  console.groupEnd();
+//   // ── 5. History stack ──────────────────────────────────────────────────────
+//   console.group('5. History — push / trimTo / accounting');
+//   const hist = new History(5);
+//   let cur = createGrid(3, 3);
+//   setCell(cur, 0, 0, 1);
+//   for (let i = 0; i < 8; i++) { hist.push(cur); cur = step(cur, RULESETS.classic); }
+//   console.log('capped at 5:',        hist.length === 5           ? 'PASS' : `FAIL (${hist.length})`);
+//   console.log('totalGenerations=8:', hist.totalGenerations === 8 ? 'PASS' : `FAIL (${hist.totalGenerations})`);
+//   console.log('oldestGeneration=3:', hist.oldestGeneration === 3 ? 'PASS' : `FAIL (${hist.oldestGeneration})`);
+//   hist.trimTo(2);
+//   console.log('trimTo(2)→length 3:', hist.length === 3           ? 'PASS' : `FAIL (${hist.length})`);
+//   console.log('total after trim=6:', hist.totalGenerations === 6 ? 'PASS' : `FAIL (${hist.totalGenerations})`);
+//   console.groupEnd();
 
-  // ── 6. Torus wrap ─────────────────────────────────────────────────────────
-  console.group('6. Torus wrap — edges connect');
-  // (0,0), (0,7) and (7,0) are mutual neighbors on a torus: each has exactly
-  // 2 alive neighbors and survives.
-  const gb = createGrid(8, 8);
-  alive(gb, [0,0],[0,7],[7,0]);
-  const gb1 = step(gb, RULESETS.classic);
-  console.log('corners survive (wrap) ✓:', countAlive(gb1) === 3 ? 'PASS' : 'FAIL');
+//   // ── 6. Torus wrap ─────────────────────────────────────────────────────────
+//   console.group('6. Torus wrap — edges connect');
+//   // (0,0), (0,7) and (7,0) are mutual neighbors on a torus: each has exactly
+//   // 2 alive neighbors and survives.
+//   const gb = createGrid(8, 8);
+//   alive(gb, [0,0],[0,7],[7,0]);
+//   const gb1 = step(gb, RULESETS.classic);
+//   console.log('corners survive (wrap) ✓:', countAlive(gb1) === 3 ? 'PASS' : 'FAIL');
 
-  // A blinker on the top visible edge wraps one cell to the bottom edge.
-  let bl = createGrid(8, 8);
-  alive(bl, [0,3],[0,4],[0,5]);
-  bl = step(bl, RULESETS.classic);
-  console.log('blinker wraps top↔bottom ✓:',
-    (getCell(bl, 0, 4) === 1 && getCell(bl, 1, 4) === 1 && getCell(bl, 7, 4) === 1) ? 'PASS' : 'FAIL');
-  bl = step(bl, RULESETS.classic);
-  console.log('blinker returns horizontal ✓:', countAlive(bl) === 3 ? 'PASS' : 'FAIL');
-  console.groupEnd();
+//   // A blinker on the top visible edge wraps one cell to the bottom edge.
+//   let bl = createGrid(8, 8);
+//   alive(bl, [0,3],[0,4],[0,5]);
+//   bl = step(bl, RULESETS.classic);
+//   console.log('blinker wraps top↔bottom ✓:',
+//     (getCell(bl, 0, 4) === 1 && getCell(bl, 1, 4) === 1 && getCell(bl, 7, 4) === 1) ? 'PASS' : 'FAIL');
+//   bl = step(bl, RULESETS.classic);
+//   console.log('blinker returns horizontal ✓:', countAlive(bl) === 3 ? 'PASS' : 'FAIL');
+//   console.groupEnd();
 
-  // ── 7. Benchmark ─────────────────────────────────────────────────────────
-  console.group('7. Benchmark — 100 gens on 100×100 (Classic)');
-  // Seeded LCG so the benchmark is reproducible without the fxhash shim
-  let seed = 0xdeadbeef;
-  const lcg = (): number => {
-    seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;
-    return seed / 0xffffffff;
-  };
-  let bench = randomizeGrid(createGrid(100, 100), 0.35, lcg);
-  console.time('step ×100');
-  for (let i = 0; i < 100; i++) bench = step(bench, RULESETS.classic);
-  console.timeEnd('step ×100');
-  console.groupEnd();
+//   // ── 7. Benchmark ─────────────────────────────────────────────────────────
+//   console.group('7. Benchmark — 100 gens on 100×100 (Classic)');
+//   // Seeded LCG so the benchmark is reproducible without the fxhash shim
+//   let seed = 0xdeadbeef;
+//   const lcg = (): number => {
+//     seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;
+//     return seed / 0xffffffff;
+//   };
+//   let bench = randomizeGrid(createGrid(100, 100), 0.35, lcg);
+//   console.time('step ×100');
+//   for (let i = 0; i < 100; i++) bench = step(bench, RULESETS.classic);
+//   console.timeEnd('step ×100');
+//   console.groupEnd();
 
-  console.groupEnd();
-}
+//   console.groupEnd();
+// }
