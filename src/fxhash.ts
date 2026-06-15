@@ -10,7 +10,6 @@ import {
   weightedPick, sampleDensity, rarityTier,
   RULESET_WEIGHTS, RULESET_POINTS,
   GRID_TIER_WEIGHTS, GRID_TIER_POINTS, GRID_TIER_RANGE,
-  DENSITY_TIER_WEIGHTS, DENSITY_TIER_POINTS,
   ACCENT_WEIGHTS, ACCENT_POINTS,
   PALETTE_WEIGHTS, PALETTE_POINTS, PALETTE_LABEL,
   SHAPE_WEIGHTS, SHAPE_POINTS, SHAPE_LABEL,
@@ -103,8 +102,8 @@ export function initFx(): FxContext {
   const [gLo, gHi] = GRID_TIER_RANGE[gridTier];
   const gridSize   = lerp(gLo, gHi);
 
-  const densityTier = weightedPick(rng, DENSITY_TIER_WEIGHTS);
-  const seedDensity = sampleDensity(rng, ruleset, densityTier);
+  // Hidden opening intensity — sampled per token, not a feature or rarity axis.
+  const seedDensity = sampleDensity(rng, ruleset);
 
   // Simplex seeding params (consumed by seedWithNoise in App).
   const noiseFrequency = 0.08 + rng() * 0.12; // 0.08–0.20
@@ -122,7 +121,6 @@ export function initFx(): FxContext {
   const points =
     RULESET_POINTS[ruleset] +
     GRID_TIER_POINTS[gridTier] +
-    DENSITY_TIER_POINTS[densityTier] +
     ACCENT_POINTS[accentVariant] +
     PALETTE_POINTS[paletteMode] +
     SHAPE_POINTS[shape];
@@ -145,15 +143,14 @@ export function initFx(): FxContext {
   // "B&W Tower / Pulse Cap". PALETTE_LABEL already yields the "… Tower" half.
   const visual = `${PALETTE_LABEL[paletteMode]} / ${ACCENT_CAP[accentVariant]}`;
 
-  // Public features (7).
+  // Public features (6).
   api.features({
-    'Ruleset':      RULESET_LABEL[ruleset],
-    'Shape':        SHAPE_LABEL[shape],
-    'Grid Size':    gridTier,
-    'Seed Density': densityTier,
-    'Skin':         skinFeature,
-    'Visual':       visual,
-    'Rarity':       rarity,
+    'Ruleset':   RULESET_LABEL[ruleset],
+    'Shape':     SHAPE_LABEL[shape],
+    'Grid Size': gridTier,
+    'Skin':      skinFeature,
+    'Visual':    visual,
+    'Rarity':    rarity,
   });
 
   return {

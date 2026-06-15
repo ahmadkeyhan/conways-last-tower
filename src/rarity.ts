@@ -6,7 +6,6 @@
 import type { RulesetName } from './engine';
 
 export type GridTier      = 'Small' | 'Medium' | 'Large';
-export type DensityTier   = 'Sparse' | 'Balanced' | 'Dense';
 // 'Chrome' / 'Dark' stay in the union (code intact) but are not in ACCENT_WEIGHTS — never minted.
 export type AccentVariant = 'White' | 'Dark' | 'Complementary' | 'Chrome' | 'Prismatic' | 'Pulse';
 export type PaletteMode    = 'colored' | 'bnw' | 'textured' | 'prismatic';
@@ -41,31 +40,19 @@ export const GRID_TIER_RANGE: Record<GridTier, readonly [number, number]> = {
   Small: [64, 85], Medium: [86, 106], Large: [107, 128],
 };
 
-// ── Seed density — tier picked, value sampled in the ruleset-aware band ─────────
-export const DENSITY_TIER_WEIGHTS: readonly [DensityTier, number][] = [
-  ['Balanced', 50], ['Sparse', 25], ['Dense', 25],
-];
-export const DENSITY_TIER_POINTS: Record<DensityTier, number> = {
-  Balanced: 0, Sparse: 1, Dense: 1,
+// ── Seed density — a hidden per-token opening intensity, NOT a feature/tier ─────
+// Sampled uniformly in the ruleset's interval (what each rule can sustain: Maze
+// fossilizes fast → tiny; Day & Night needs ~0.4+). Doesn't affect rarity.
+export const DENSITY_RANGE: Record<RulesetName, readonly [number, number]> = {
+  classic:  [0.15, 0.50],
+  highlife: [0.15, 0.50],
+  daynight: [0.28, 0.50],
+  maze:     [0.03, 0.06],
+  brain:    [0.03, 0.06], // dormant
 };
 
-// Per-ruleset, per-tier density range [lo, hi]. The simplex seeder clusters cells,
-// so these are wider than the old uniform-scatter bands. Density is relative to
-// what each rule can sustain (Maze fossilizes fast → tiny; Day&Night needs ~0.5).
-type DensityBand = Record<DensityTier, readonly [number, number]>;
-export const DENSITY_BANDS: Record<RulesetName, DensityBand> = {
-  classic:  { Sparse: [0.12, 0.22], Balanced: [0.28, 0.42], Dense: [0.50, 0.65] },
-  highlife: { Sparse: [0.12, 0.22], Balanced: [0.28, 0.42], Dense: [0.50, 0.65] },
-  daynight: { Sparse: [0.18, 0.28], Balanced: [0.38, 0.52], Dense: [0.58, 0.70] },
-  maze:     { Sparse: [0.03, 0.04], Balanced: [0.05, 0.07], Dense: [0.08, 0.10] },
-  brain:    { Sparse: [0.03, 0.04], Balanced: [0.05, 0.07], Dense: [0.08, 0.10] }, // dormant
-};
-
-// Sample the target density uniformly within the drawn tier's band for this ruleset.
-export function sampleDensity(
-  rng: () => number, ruleset: RulesetName, tier: DensityTier,
-): number {
-  const [lo, hi] = DENSITY_BANDS[ruleset][tier];
+export function sampleDensity(rng: () => number, ruleset: RulesetName): number {
+  const [lo, hi] = DENSITY_RANGE[ruleset];
   return lo + rng() * (hi - lo);
 }
 
@@ -100,13 +87,13 @@ export const SHAPE_LABEL: Record<ShapeKind, string> = {
 };
 
 // ── Rarity tier ────────────────────────────────────────────────────────────────
-// Thresholds calibrated by simulation (Shape + Pulse in; Chrome/Dark/Gold out of
-// the draw). Resulting frequencies ≈ Common 54% · Uncommon 28% · Rare 13% ·
-// Epic 4% · Legendary 0.9% — each tier meaningfully rarer than the last.
+// Thresholds calibrated by simulation (Seed Density dropped as a rarity axis;
+// max points now 15). Resulting frequencies ≈ Common 45% · Uncommon 32% ·
+// Rare 16% · Epic 5.5% · Legendary 1.3% — close to the 50/28/15/5.5/1.5 target.
 export function rarityTier(points: number): RarityTier {
-  if (points <= 4)  return 'Common';
-  if (points <= 6)  return 'Uncommon';
-  if (points <= 8)  return 'Rare';
-  if (points <= 10) return 'Epic';
+  if (points <= 3) return 'Common';
+  if (points <= 5) return 'Uncommon';
+  if (points <= 7) return 'Rare';
+  if (points <= 9) return 'Epic';
   return 'Legendary';
 }
