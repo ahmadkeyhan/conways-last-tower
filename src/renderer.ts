@@ -134,7 +134,11 @@ export class Renderer {
   private readonly _hsl = { h: 0, s: 0, l: 0 };
   private readonly _bodyScratch = new THREE.Color();
   private readonly _capScratch  = new THREE.Color();
-  private readonly _white = new THREE.Color(1, 0.84, 0); // chrome caps: PBR does the work
+  private readonly _white = new THREE.Color(1, 0.84, 0); // chrome caps: gold tint
+  private readonly _capWhite = new THREE.Color(1, 1, 1); // pulse caps: pure-white tint
+  // Pulse accent: base hue + saturation parsed once; lightness breathes per frame.
+  private _pulseHue = 0;
+  private _pulseSat = 0;
   // Sphere caps enclose the body sphere (concentric) rather than sit on top.
   private readonly _capAtCenter: boolean;
 
@@ -156,6 +160,10 @@ export class Renderer {
     this._towerMain   = new THREE.Color(skin.towerColor);
     this._towerNoise  = new THREE.Color(skin.towerNoiseColor);
     this._accentMain  = new THREE.Color(skin.accentColor);
+    // Pulse base hue/sat (lightness is animated each frame in render()).
+    this._accentMain.getHSL(this._hsl);
+    this._pulseHue = this._hsl.h;
+    this._pulseSat = this._hsl.s;
     // Dying cells (Brian's Brain) use the skin's triadic dying hue — unrelated
     // to tower or accent. Cap uses it as-is; the cube is darkened (fading embers).
     const dying = new THREE.Color(skin.dyingColor);
@@ -492,6 +500,15 @@ export class Renderer {
         0.22 * this._editAmt;
     }
 
+    // Pulse accent: breathe the cap material's lightness (~5 s cycle). Caps use a
+    // white instance tint, so this single material color drives every cap.
+    if (this.skin.accentMode === 'pulse') {
+      const t = (Math.sin(now / 800) + 1) / 2;        // 0–1
+      const l = 0.45 + t * 0.35;                       // 45 % → 80 %
+      (this.capMesh.material as THREE.MeshBasicMaterial).color
+        .setHSL(this._pulseHue, this._pulseSat, l);
+    }
+
     this.gl.render(this.scene, this.camera);
   }
 
@@ -633,11 +650,12 @@ export class Renderer {
 
     // Rarity variant flags (read once per build)
     const pal       = this.skin.paletteMode;
-    const noisy     = pal === 'noisy';
-    const rainbow   = pal === 'rainbow';
+    const noisy     = pal === 'textured';
+    const rainbow   = pal === 'prismatic';
     const nmap      = this.skin.noiseMap;
     const prismatic = this.skin.accentMode === 'prismatic';
     const metallic  = this.skin.accentMode === 'metallic';
+    const pulse     = this.skin.accentMode === 'pulse';
     const denom     = rows + cols;
     // Sphere caps are concentric shells (body center); cube/cylinder sit on top.
     const capYpos   = this._capAtCenter ? layerY : capY;
@@ -685,9 +703,11 @@ export class Renderer {
         if (state === 2) {
           cap = this._dyingCap;
         } else if (metallic) {
-          // White instance tint — the PBR material's metalness + env reflection
-          // gives the chrome look; per-cell color would only mute it.
+          // Gold instance tint over the PBR env reflection → rose-gold chrome.
           cap = this._white;
+        } else if (pulse) {
+          // Pure-white tint so the material's breathing color shows unmuted.
+          cap = this._capWhite;
         } else if (prismatic) {
           // Rainbow gradient across the top face (visible in the static capture).
           this._capScratch.setHSL(((r + c) / denom) % 1, 0.7, 0.6);

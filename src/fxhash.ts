@@ -38,6 +38,10 @@ export type TokenTraits = {
   stampTier:    StampTier;     // internal — edit-mode stamp library (not a feature)
   historyDepth: number;        // internal — max generations stored (not a feature)
   seedDensity:  number;        // opening-soup live fraction (ruleset-aware band)
+  // Simplex seeding params (internal — not features)
+  noiseFrequency: number;
+  noiseOffsetX:   number;
+  noiseOffsetY:   number;
   skinId:       string;
   // Rarity axes
   accent:       AccentVariant;
@@ -62,6 +66,17 @@ const RULESET_LABEL: Record<RulesetName, string> = {
   maze:     'Maze',
   daynight: 'Day & Night',
   brain:    "Brian's Brain",
+};
+
+// Accent half of the compound "Visual" feature. Dormant variants (Dark/Chrome)
+// are included so the map stays total over AccentVariant.
+const ACCENT_CAP: Record<AccentVariant, string> = {
+  White:         'White Cap',
+  Complementary: 'Complementary Cap',
+  Prismatic:     'Prismatic Cap',
+  Pulse:         'Pulse Cap',
+  Dark:          'Dark Cap',
+  Chrome:        'Chrome Cap',
 };
 
 export function initFx(): FxContext {
@@ -91,6 +106,11 @@ export function initFx(): FxContext {
   const densityTier = weightedPick(rng, DENSITY_TIER_WEIGHTS);
   const seedDensity = sampleDensity(rng, ruleset, densityTier);
 
+  // Simplex seeding params (consumed by seedWithNoise in App).
+  const noiseFrequency = 0.08 + rng() * 0.12; // 0.08–0.20
+  const noiseOffsetX   = rng() * 1000;
+  const noiseOffsetY   = rng() * 1000;
+
   const shape = weightedPick(rng, SHAPE_WEIGHTS);
 
   // Internal-only traits (not features); drawn last so they don't perturb the
@@ -110,25 +130,29 @@ export function initFx(): FxContext {
 
   const traits: TokenTraits = {
     gridSize, ruleset, stampTier, historyDepth, seedDensity,
+    noiseFrequency, noiseOffsetX, noiseOffsetY,
     skinId: skin.id, accent: accentVariant, palette: paletteMode, shape, rarity,
   };
 
-  // Public features (7). Grid Size / Seed Density show the drawn tier. The Skin
-  // hue family is only meaningful when the tower carries that hue — monochrome
-  // greyscales the scene and rainbow spans every hue, so report those instead.
+  // The Skin hue family is only meaningful when the tower carries that hue —
+  // B&W greyscales the scene and Prismatic spans every hue, so report those.
   const skinFeature =
-    paletteMode === 'monochrome' ? 'Greyscale'
-    : paletteMode === 'rainbow'  ? 'Spectrum'
+    paletteMode === 'bnw'       ? 'Greyscale'
+    : paletteMode === 'prismatic' ? 'Spectrum'
     : skin.name;
 
+  // Palette + Accent merge into one compound "Visual" feature, e.g.
+  // "B&W Tower / Pulse Cap". PALETTE_LABEL already yields the "… Tower" half.
+  const visual = `${PALETTE_LABEL[paletteMode]} / ${ACCENT_CAP[accentVariant]}`;
+
+  // Public features (7).
   api.features({
     'Ruleset':      RULESET_LABEL[ruleset],
-    'Skin':         skinFeature,
+    'Shape':        SHAPE_LABEL[shape],
     'Grid Size':    gridTier,
     'Seed Density': densityTier,
-    'Accent':       accentVariant,
-    'Palette':      PALETTE_LABEL[paletteMode],
-    'Shape':        SHAPE_LABEL[shape],
+    'Skin':         skinFeature,
+    'Visual':       visual,
     'Rarity':       rarity,
   });
 

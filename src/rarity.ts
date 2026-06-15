@@ -7,9 +7,9 @@ import type { RulesetName } from './engine';
 
 export type GridTier      = 'Small' | 'Medium' | 'Large';
 export type DensityTier   = 'Sparse' | 'Balanced' | 'Dense';
-// 'Chrome' stays in the union (code intact) but is not in ACCENT_WEIGHTS — never minted.
-export type AccentVariant = 'White' | 'Dark' | 'Complementary' | 'Chrome' | 'Prismatic';
-export type PaletteMode    = 'standard' | 'monochrome' | 'noisy' | 'rainbow';
+// 'Chrome' / 'Dark' stay in the union (code intact) but are not in ACCENT_WEIGHTS — never minted.
+export type AccentVariant = 'White' | 'Dark' | 'Complementary' | 'Chrome' | 'Prismatic' | 'Pulse';
+export type PaletteMode    = 'colored' | 'bnw' | 'textured' | 'prismatic';
 export type ShapeKind     = 'cube' | 'cylinder' | 'sphere';
 export type RarityTier    = 'Common' | 'Uncommon' | 'Rare' | 'Epic' | 'Legendary';
 
@@ -49,49 +49,45 @@ export const DENSITY_TIER_POINTS: Record<DensityTier, number> = {
   Balanced: 0, Sparse: 1, Dense: 1,
 };
 
-// Per-ruleset sustainable density range [lo, hi]. Density is relative to what
-// each rule can keep alive — the tier picks a sub-region of this range.
-export const SEED_DENSITY: Record<RulesetName, readonly [number, number]> = {
-  classic:  [0.30, 0.38], // standard soup — long-lived dynamics before settling
-  highlife: [0.30, 0.38], // like classic plus replicators
-  maze:     [0.03, 0.07], // permissive survival saturates fast
-  daynight: [0.42, 0.50], // self-complementary; needs density near 0.5 or it collapses
-  brain:    [0.03, 0.07], // kept for code integrity — never drawn
+// Per-ruleset, per-tier density range [lo, hi]. The simplex seeder clusters cells,
+// so these are wider than the old uniform-scatter bands. Density is relative to
+// what each rule can sustain (Maze fossilizes fast → tiny; Day&Night needs ~0.5).
+type DensityBand = Record<DensityTier, readonly [number, number]>;
+export const DENSITY_BANDS: Record<RulesetName, DensityBand> = {
+  classic:  { Sparse: [0.12, 0.22], Balanced: [0.28, 0.42], Dense: [0.50, 0.65] },
+  highlife: { Sparse: [0.12, 0.22], Balanced: [0.28, 0.42], Dense: [0.50, 0.65] },
+  daynight: { Sparse: [0.18, 0.28], Balanced: [0.38, 0.52], Dense: [0.58, 0.70] },
+  maze:     { Sparse: [0.03, 0.04], Balanced: [0.05, 0.07], Dense: [0.08, 0.10] },
+  brain:    { Sparse: [0.03, 0.04], Balanced: [0.05, 0.07], Dense: [0.08, 0.10] }, // dormant
 };
 
-// Map the tier to a center within the ruleset's range, then triangular-sample
-// around it (two-rng average → peak at center), clamped back into the range.
+// Sample the target density uniformly within the drawn tier's band for this ruleset.
 export function sampleDensity(
   rng: () => number, ruleset: RulesetName, tier: DensityTier,
 ): number {
-  const [lo, hi] = SEED_DENSITY[ruleset];
-  const span   = hi - lo;
-  const center = tier === 'Sparse' ? lo + span * 0.17
-               : tier === 'Dense'  ? hi - span * 0.17
-               : lo + span * 0.5;
-  const jitter = (rng() + rng() - 1) * span * 0.22;
-  return Math.min(hi, Math.max(lo, center + jitter));
+  const [lo, hi] = DENSITY_BANDS[ruleset][tier];
+  return lo + rng() * (hi - lo);
 }
 
 // ── Accent variant ─────────────────────────────────────────────────────────────
 // Chrome and Dark are intentionally absent (dropped from the draw, not enough
 // cap contrast); their code/points stay so they can still be forced for testing.
 export const ACCENT_WEIGHTS: readonly [AccentVariant, number][] = [
-  ['White', 62], ['Complementary', 30], ['Prismatic', 8],
+  ['White', 55], ['Complementary', 30], ['Prismatic', 8], ['Pulse', 7],
 ];
 export const ACCENT_POINTS: Record<AccentVariant, number> = {
-  White: 0, Dark: 1, Complementary: 1, Chrome: 2, Prismatic: 4,
+  White: 0, Dark: 1, Complementary: 1, Chrome: 2, Pulse: 3, Prismatic: 4,
 };
 
 // ── Palette mode ───────────────────────────────────────────────────────────────
 export const PALETTE_WEIGHTS: readonly [PaletteMode, number][] = [
-  ['standard', 50], ['monochrome', 30], ['noisy', 14], ['rainbow', 6],
+  ['colored', 50], ['bnw', 30], ['textured', 14], ['prismatic', 6],
 ];
 export const PALETTE_POINTS: Record<PaletteMode, number> = {
-  standard: 0, monochrome: 1, noisy: 2, rainbow: 4,
+  colored: 0, bnw: 1, textured: 2, prismatic: 4,
 };
 export const PALETTE_LABEL: Record<PaletteMode, string> = {
-  standard: 'Standard', monochrome: 'Monochrome', noisy: 'Noisy', rainbow: 'Rainbow',
+  colored: 'Colored Tower', bnw: 'B&W Tower', textured: 'Textured Tower', prismatic: 'Prismatic Tower',
 };
 
 // ── Shape (body voxel geometry) ────────────────────────────────────────────────
@@ -104,9 +100,9 @@ export const SHAPE_LABEL: Record<ShapeKind, string> = {
 };
 
 // ── Rarity tier ────────────────────────────────────────────────────────────────
-// Thresholds calibrated by simulation (Shape axis in; Chrome + Dark out of the
-// accent draw). Resulting frequencies ≈ Common 58% · Uncommon 27% · Rare 11% ·
-// Epic 3.3% · Legendary 0.7% — each tier meaningfully rarer than the last.
+// Thresholds calibrated by simulation (Shape + Pulse in; Chrome/Dark/Gold out of
+// the draw). Resulting frequencies ≈ Common 54% · Uncommon 28% · Rare 13% ·
+// Epic 4% · Legendary 0.9% — each tier meaningfully rarer than the last.
 export function rarityTier(points: number): RarityTier {
   if (points <= 4)  return 'Common';
   if (points <= 6)  return 'Uncommon';

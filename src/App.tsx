@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
-  createGrid, randomizeGrid, step, cloneGrid, History, RULESETS,
+  createGrid, seedWithNoise, step, cloneGrid, History, RULESETS,
   getCell, setCell, innerSnapshot, countAlive,
 } from './engine';
 import type { Grid } from './engine';
@@ -73,9 +73,14 @@ export default function App() {
     let   gridN = N;                    // current active grid size (editable)
 
     let history = new History(traits.historyDepth);
-    // The opening soup is a token trait: density sampled in initFx, captured
-    // immutably so Restart can replay the exact same generation 0.
-    let grid = randomizeGrid(createGrid(gridN, gridN), traits.seedDensity, rng);
+    // The opening soup is a token trait: simplex-noise clustered seed at the
+    // sampled density + ruleset guards, captured immutably so Restart replays
+    // the exact same generation 0.
+    let grid = seedWithNoise(
+      gridN, gridN, traits.seedDensity,
+      traits.noiseFrequency, traits.noiseOffsetX, traits.noiseOffsetY,
+      traits.ruleset, rng,
+    );
     const initialSoup = cloneGrid(grid); // token's gen-0, captured once at size N
     history.push(grid);
 

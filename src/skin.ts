@@ -26,8 +26,8 @@ export type Skin = {
 
   // ── Rarity variants ──────────────────────────────────────────────────────
   paletteMode: PaletteMode;          // standard | monochrome | noisy | rainbow
-  // solid → flat caps · prismatic → rainbow caps · metallic → reflective PBR caps
-  accentMode:  'solid' | 'prismatic' | 'metallic';
+  // solid → flat caps · prismatic → rainbow caps · metallic → PBR caps · pulse → breathing caps
+  accentMode:  'solid' | 'prismatic' | 'metallic' | 'pulse';
   // Per-cell HSL offsets for noisy (undefined otherwise). Signed values in
   // ~[-1, 1]; renderer scales into hue/lightness deltas.
   noiseMap?:   Float32Array;
@@ -107,11 +107,17 @@ export function deriveSkin(rng: () => number, opts: SkinOptions): Skin {
 
   // ── Accent variant (independent of the palette mode — the one guaranteed pop)
   let accentHue: number, accentSat: number, accentL: number;
-  let accentMode: 'solid' | 'prismatic' | 'metallic' = 'solid';
+  let accentMode: 'solid' | 'prismatic' | 'metallic' | 'pulse' = 'solid';
   let flatAccent = false; // true → cap has no speckle (noiseColor === color)
   switch (accentVariant) {
     case 'White':
       accentHue = baseHue; accentSat = 0.05 + rng() * 0.05; accentL = 0.92 + rng() * 0.05;
+      break;
+    case 'Pulse':
+      // Renderer breathes the cap lightness each frame; accentColor only carries
+      // the base hue + saturation it pulses (greyscale on B&W tokens).
+      accentMode = 'pulse';
+      accentHue = baseHue; accentSat = paletteMode === 'bnw' ? 0 : 0.9; accentL = 0.6;
       break;
     case 'Dark':
       // Deep, desaturated base-hue cap — sinks below the tower tone.
@@ -138,12 +144,12 @@ export function deriveSkin(rng: () => number, opts: SkinOptions): Skin {
     ? accentColor
     : hslToHex(accentHue, accentSat * 0.95, accentL - 0.1);
 
-  // ── Palette mode. Monochrome zeroes the scene saturation (accent stays the one
-  // pop). Noisy carries a per-cell HSL offset map the renderer applies to the
-  // body cubes. Rainbow is painted entirely by the renderer (unsaturated rainbow
-  // across the body), so the skin keeps standard colors here.
-  const mono  = paletteMode === 'monochrome';
-  const noisy = paletteMode === 'noisy';
+  // ── Palette mode. 'bnw' zeroes the scene saturation (accent stays the one pop).
+  // 'textured' carries a per-cell HSL offset map the renderer applies to the body
+  // cubes. 'prismatic' is painted entirely by the renderer (unsaturated rainbow
+  // across the body), so the skin keeps colored values here.
+  const mono  = paletteMode === 'bnw';
+  const noisy = paletteMode === 'textured';
   const tSat  = mono ? 0 : towerSat;
   const bSat  = mono ? 0 : bgSat;
 
@@ -195,6 +201,6 @@ export const FALLBACK_SKIN: Skin = {
   backgroundColor: 'hsl(0, 0%, 12%)',
   gridColor:       '#ffffff',
 
-  paletteMode: 'standard',
+  paletteMode: 'colored',
   accentMode:  'solid',
 };

@@ -1,3 +1,5 @@
+import { createNoise2D } from 'simplex-noise';
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type CellState = 0 | 1 | 2; // 0=dead  1=alive  2=dying (Brian's Brain)
@@ -100,6 +102,56 @@ export function randomizeGrid(grid: Grid, density = 0.3, rng = Math.random): Gri
     buf.data[i] = rng() < density ? 1 : 0;
   }
   return buf;
+}
+
+// ── Simplex-noise seeding ──────────────────────────────────────────────────────
+//
+// Clustered openings sustain Life longer than uniform scatter: dense pockets feed
+// each other while sparse gaps give patterns room to travel. After sampling the
+// noise field we enforce ruleset-specific live-cell floors/ceilings so no token
+// dies instantly or fossilizes — silent correction along the noise gradient.
+
+// Min/max live-cell fraction per ruleset (of total cells).
+export const DENSITY_MINIMUMS: Record<RulesetName, number> = {
+  classic: 0.12, highlife: 0.12, daynight: 0.18, maze: 0.03, brain: 0.03,
+};
+export const DENSITY_MAXIMUMS: Record<RulesetName, number> = {
+  classic: 0.65, highlife: 0.65, daynight: 0.70, maze: 0.10, brain: 0.10,
+};
+
+export function seedWithNoise(
+  rows: number, cols: number, density: number,
+  frequency: number, offsetX: number, offsetY: number,
+  ruleset: RulesetName, rng: () => number = Math.random,
+): GridBuffer {
+  const noise2D = createNoise2D(rng); // permutation seeded from rng → deterministic
+  const size = rows * cols;
+  const data = new Uint8Array(size);
+  const noiseVals = new Float32Array(size);
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const n = (noise2D((c + offsetX) * frequency, (r + offsetY) * frequency) + 1) / 2; // 0–1
+      // Small rng perturbation breaks the mechanical smoothness of pure noise.
+      noiseVals[r * cols + c] = n + (rng() * 2 - 1) * 0.08;
+    }
+  }
+
+  // Simplex output isn't uniform (it clusters near 0.5), so a fixed value
+  // threshold wouldn't hit the target density. Instead keep the `target`
+  // HIGHEST-noise cells — exactly `density` of the grid, biased to the noise
+  // peaks so the live cells form organic clusters. Clamp the count into the
+  // ruleset's [min, max] guard band (silent floor/ceiling — no instant death,
+  // no instant fossilization).
+  const minCells = Math.round(DENSITY_MINIMUMS[ruleset] * size);
+  const maxCells = Math.round(DENSITY_MAXIMUMS[ruleset] * size);
+  const target = Math.min(maxCells, Math.max(minCells, Math.round(density * size)));
+
+  const idx = Array.from({ length: size }, (_, i) => i);
+  idx.sort((a, b) => noiseVals[b] - noiseVals[a]); // highest noise first
+  for (let k = 0; k < target; k++) data[idx[k]] = 1;
+
+  return { rows, cols, data, back: new Uint8Array(size) };
 }
 
 // ── Neighbor counting (exported utility; NOT inlined inside step) ─────────────
