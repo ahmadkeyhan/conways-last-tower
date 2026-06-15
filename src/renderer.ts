@@ -527,16 +527,45 @@ export class Renderer {
     this._editTarget   = 0;
   }
 
-  // Static preview/capture frame: hide the ground, freeze the camera at the
-  // classic isometric corner (no orbit, no edit/paused offsets), render once.
+  // Static preview/capture frame: hide the ground, freeze at the classic iso
+  // corner, and frame the WHOLE tower cube centered with margin (the live view
+  // tracks only the top, which crops the cube in a capture).
   renderCapture(): void {
     this.ground.visible = false;
     this._angleTarget = null;
     this._camAngle    = Math.PI / 4; // classic isometric corner
     this._editAmt = this._editTarget = 0;
     this._pausedAmt = this._pausedTarget = 0;
-    this._applyProjection();
-    this._trackCamera();
+
+    // Cube geometry: footprint cols×rows, `visible` layers tall, top at totalCommits.
+    const topY    = this.totalCommits;
+    const visible = Math.min(this.totalCommits, this.visibleLayers);
+    const centerY = topY - visible / 2;
+
+    // Projected extents in the (1,1,1) iso orthographic view (world units):
+    //   width  = (cols+rows)/√2
+    //   height = (cols+rows + 2·layers)/√6
+    const projW = (this.cols + this.rows) / Math.SQRT2;
+    const projH = (this.cols + this.rows + 2 * visible) / Math.sqrt(6);
+    const MARGIN = 1.3; // ~12 % breathing room on the binding axis
+    const aspect = this._aspect;
+    const h = Math.max(projH, projW / aspect) * MARGIN;
+    const w = h * aspect;
+    this.camera.left   = -w / 2;
+    this.camera.right  =  w / 2;
+    this.camera.top    =  h / 2;
+    this.camera.bottom = -h / 2;
+    this.camera.updateProjectionMatrix();
+
+    // Pivot on the cube center so it sits centered; fog ref = cube top; sun follows.
+    this._towerTopY.value = topY;
+    const fh = this.frustumH;
+    this._camPivot.set(0, centerY, 0);
+    this.sun.position.set(fh * 0.55, centerY + fh * 1.1, fh * 0.3);
+    this.sun.target.position.copy(this._camPivot);
+    this.sun.target.updateMatrixWorld();
+    this._positionCamera();
+
     this.gl.shadowMap.needsUpdate = true;
     this.gl.render(this.scene, this.camera);
   }

@@ -465,9 +465,10 @@ export default function App() {
     }
 
     if (isCapture) {
-      // Capture path: fast-forward to gen 120, freeze at the isometric corner
-      // (ground + UI hidden), render one frame, then trigger the fxhash snapshot.
-      const CAPTURE_GEN = 120;
+      // Capture path: fast-forward to a full cube (one generation per grid row),
+      // freeze at the isometric corner (ground + UI hidden), render one framed
+      // frame, then trigger the fxhash snapshot.
+      const CAPTURE_GEN = N; // grid size → the tower is a complete N×N×N cube
       while (history.totalGenerations < CAPTURE_GEN) {
         grid = step(grid, ruleset);
         history.push(grid);
