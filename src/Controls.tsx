@@ -1,6 +1,9 @@
 // Transport controls + vertical timeline scrubber (paused only).
 // Purely presentational — all sim state lives in App.tsx.
 
+import GolIcon from './GolIcon';
+import { ICONS } from './icons';
+
 export type ControlsProps = {
   playing: boolean;
   editing: boolean;
@@ -23,12 +26,8 @@ export default function Controls({
   if (editing) {
     return (
       <div id="controls">
-        <button type="button" title="Clear canvas" onClick={onClear}>
-          🗑
-        </button>
-        <button type="button" title="Start (space)" onClick={onPlayPause}>
-          ▶
-        </button>
+        <GolIcon seed={ICONS.clear} title="Clear canvas" onClick={onClear} />
+        <GolIcon seed={ICONS.start} title="Start (space)" onClick={onPlayPause} />
       </div>
     );
   }
@@ -36,29 +35,23 @@ export default function Controls({
   return (
     <>
       <div id="controls">
-        <button type="button" title="Restart" onClick={onRestart}>
-          ⟳
-        </button>
-        <button type="button" title="Edit canvas" onClick={onEdit}>
-          ✎
-        </button>
+        <GolIcon seed={ICONS.restart} title="Restart" onClick={onRestart} />
+        <GolIcon seed={ICONS.edit} title="Edit canvas" onClick={onEdit} />
         {!playing && (
-          <button
-            type="button"
+          <GolIcon
+            seed={ICONS.stepBack}
             title="Step backward (←)"
             disabled={scrubIndex <= 0}
             onClick={onStepBack}
-          >
-            ◄
-          </button>
+          />
         )}
-        <button type="button" title="Play / pause (space)" onClick={onPlayPause}>
-          {playing ? '⏸' : '▶'}
-        </button>
+        <GolIcon
+          seed={playing ? ICONS.pause : ICONS.play}
+          title="Play / pause (space)"
+          onClick={onPlayPause}
+        />
         {!playing && (
-          <button type="button" title="Step forward (→)" onClick={onStepFwd}>
-            ►
-          </button>
+          <GolIcon seed={ICONS.stepFwd} title="Step forward (→)" onClick={onStepFwd} />
         )}
       </div>
 

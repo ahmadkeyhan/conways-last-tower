@@ -53,7 +53,7 @@ html, body, #root {
 #controls button {
   background: none;
   border: none;
-  padding: 4px 8px;
+  padding: 4px;
   font: 16px/1 ui-monospace, Consolas, monospace;
   color: rgba(255, 255, 255, 0.5);
   cursor: pointer;
@@ -67,6 +67,31 @@ html, body, #root {
 #controls button:disabled {
   color: rgba(255, 255, 255, 0.15);
   cursor: default;
+}
+
+/* GoL hover-animated icons — color drives the canvas fill (currentColor).
+   Canvas backing store stays 24×24 (1px/cell); CSS upscales big with
+   image-rendering: pixelated → crisp, distinguished GoL pixels. */
+#controls {
+  gap: clamp(8px, 1.5vw, 20px);
+}
+
+#controls button.gol-icon {
+  display: block;
+  width: clamp(24px, 8vw, 64px);
+  height: clamp(24px, 8vw, 64px);
+  padding: 0;
+  line-height: 0;
+}
+
+#controls button.gol-icon:hover:not(:disabled) {
+  color: var(--accent, rgba(255, 255, 255, 0.95));
+}
+
+#controls button.gol-icon canvas {
+  width: 100%;
+  height: 100%;
+  /* image-rendering: pixelated; */
 }
 
 #scrubber {
