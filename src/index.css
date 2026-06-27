@@ -78,14 +78,18 @@ html, body, #root {
 
 #controls button.gol-icon {
   display: block;
-  width: clamp(24px, 8vw, 64px);
-  height: clamp(24px, 8vw, 64px);
+  width: clamp(24px, 6vw, 48px);
+  height: clamp(24px, 6vw, 48px);
   padding: 0;
   line-height: 0;
 }
 
 #controls button.gol-icon:hover:not(:disabled) {
   color: var(--accent, rgba(255, 255, 255, 0.95));
+}
+
+.rotate {
+  rotate: 45deg;
 }
 
 #controls button.gol-icon canvas {

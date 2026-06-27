@@ -36,7 +36,7 @@ export default function Controls({
     <>
       <div id="controls">
         <GolIcon seed={ICONS.restart} title="Restart" onClick={onRestart} />
-        <GolIcon seed={ICONS.edit} title="Edit canvas" onClick={onEdit} />
+        <GolIcon seed={ICONS.edit} className="rotate" title="Edit canvas" onClick={onEdit} />
         {!playing && (
           <GolIcon
             seed={ICONS.stepBack}

@@ -14,9 +14,10 @@ export type GolIconProps = {
   title: string;
   onClick: () => void;
   disabled?: boolean;
+  className?: string;
 };
 
-export default function GolIcon({ seed, title, onClick, disabled }: GolIconProps) {
+export default function GolIcon({ seed, title, onClick, disabled, className }: GolIconProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -81,7 +82,7 @@ export default function GolIcon({ seed, title, onClick, disabled }: GolIconProps
   }, [seed]);
 
   return (
-    <button type="button" className="gol-icon" title={title} onClick={onClick} disabled={disabled}>
+    <button type="button" className={`gol-icon ${className}`} title={title} onClick={onClick} disabled={disabled}>
       <canvas ref={canvasRef} width={SIZE*8} height={SIZE*8} aria-hidden="true" />
     </button>
   );
